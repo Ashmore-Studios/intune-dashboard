@@ -1,0 +1,8 @@
+services:
+  intune-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "80"
