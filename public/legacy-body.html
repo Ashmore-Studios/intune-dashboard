@@ -1,0 +1,2405 @@
+<div class="container">
+  <span class="eyebrow">Workspace</span>
+  <h1>THE Intune Dashboard</h1>
+  <p class="subtitle">Triage Intune app failures faster — in your browser, with AI on tap.</p>
+
+  <div class="tabs">
+    <button class="tab" data-tab="local">Local</button>
+    <button class="tab active" data-tab="intune">Intune</button>
+    <button class="tab" data-tab="analyze">Analyze</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </div>
+
+  <div id="viewLocal" style="display:none;">
+  <div class="tab-hint">Audit one Windows machine's uninstall registry — 32/64-bit, install dates, publishers, and copyable silent uninstall strings.</div>
+  <div id="dashboard" style="display:none;">
+    <div class="tiles">
+      <div class="tile">
+        <div class="tile-label">Total</div>
+        <div class="tile-value" id="kTotal">0</div>
+        <div class="tile-sub">unique applications</div>
+      </div>
+      <div class="tile">
+        <div class="tile-label">64-bit only</div>
+        <div class="tile-value" id="k64">0</div>
+        <div class="tile-sub"><span id="k64Pct">0%</span> · native</div>
+      </div>
+      <div class="tile">
+        <div class="tile-label">32-bit only</div>
+        <div class="tile-value accent" id="k32">0</div>
+        <div class="tile-sub"><span id="k32Pct">0%</span> · WOW6432Node</div>
+      </div>
+      <div class="tile">
+        <div class="tile-label">Both arch</div>
+        <div class="tile-value" id="kBoth">0</div>
+        <div class="tile-sub">registered twice</div>
+      </div>
+      <div class="tile">
+        <div class="tile-label">System</div>
+        <div class="tile-value" id="kSys">0</div>
+        <div class="tile-sub">hidden components</div>
+      </div>
+      <div class="tile">
+        <div class="tile-label">Per-user</div>
+        <div class="tile-value" id="kHkcu">0</div>
+        <div class="tile-sub">HKCU installs</div>
+      </div>
+    </div>
+
+    <div class="hero">
+      <div class="hero-left">
+        <div class="tile-label">Architecture Breakdown</div>
+        <div class="hero-value" id="heroTotal">0</div>
+        <div class="hero-caption">unique applications detected</div>
+      </div>
+      <div class="hero-right">
+        <div class="breakdown-row">
+          <div><span class="dot" style="background:#5a8ec4;"></span><span class="label">64-bit only</span></div>
+          <div><span class="val" id="heroX64">0</span></div>
+        </div>
+        <div class="breakdown-row">
+          <div><span class="dot" style="background:var(--accent);"></span><span class="label">32-bit only (WOW6432Node)</span></div>
+          <div><span class="val" id="heroX86">0</span></div>
+        </div>
+        <div class="breakdown-row">
+          <div><span class="dot" style="background:#4caf50;"></span><span class="label">Registered as both</span></div>
+          <div><span class="val" id="heroBoth">0</span></div>
+        </div>
+        <div class="breakdown-row">
+          <div><span class="dot" style="background:#6b6b70;"></span><span class="label">System components</span></div>
+          <div><span class="val" id="heroSys">0</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="table-card">
+      <div class="table-toolbar">
+        <h2>Applications</h2>
+        <div class="controls">
+          <input type="text" class="search" id="filter" placeholder="Search by name or publisher…">
+          <label class="toggle"><input type="checkbox" id="hideSystem" checked> Hide system</label>
+          <label class="toggle"><input type="checkbox" id="dedupe" checked> Collapse 32/64-bit duplicates</label>
+          <label class="toggle"><input type="file" id="csvFile2" accept=".csv,.reg" multiple style="display:none;"><span style="cursor:pointer; color:var(--accent); font-weight:600;" onclick="document.getElementById('csvFile2').click()">↻ Replace / add files</span></label>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th data-sort="DisplayName">Application <span class="arrow">▼</span></th>
+            <th data-sort="DisplayVersion">Version <span class="arrow">▼</span></th>
+            <th data-sort="Publisher">Publisher <span class="arrow">▼</span></th>
+            <th data-sort="InstallDate">Installed On <span class="arrow">▼</span></th>
+            <th data-sort="Location">Location <span class="arrow">▼</span></th>
+            <th data-sort="Arch">Arch <span class="arrow">▼</span></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="footer-count"><span id="count">0</span> applications shown</div>
+    </div>
+  </div>
+
+  <div id="uploadPrompt" class="upload-prompt">
+    <div style="font-size: 32px; margin-bottom: 8px;">📦</div>
+    <div style="font-size:18px; font-weight:700; color:var(--ink);">Drop a registry export to start</div>
+    <div style="font-size:13px; margin-top:6px;">A PowerShell-generated CSV, or one-or-more <code>.reg</code> files from Intune <em>Collect diagnostics</em>.</div>
+    <input type="file" id="csvFile" accept=".csv,.reg" multiple>
+    <label for="csvFile">Select files</label>
+
+    <div class="ps-helper">
+
+      <div style="margin-bottom:28px;">
+        <div style="font-weight:700; font-size:13px; color:var(--ink); margin-bottom:2px;">Option A · PowerShell on the device</div>
+        <div style="font-size:11px; color:var(--muted); margin-bottom:10px;">Full picture — HKLM 32-bit, HKLM 64-bit, <strong>and per-user HKCU</strong>. Use this when you have remote PowerShell or console access to the machine.</div>
+        <button id="copyPs" class="btn btn-ghost" style="font-size:11px; padding:2px 10px; margin-bottom:8px;">Copy</button>
+<pre id="psSnippet">$paths = @(
+  'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+  'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+  'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+)
+$desktop = [Environment]::GetFolderPath("Desktop")
+Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
+  Where-Object { $_.DisplayName } |
+  Select-Object DisplayName, DisplayVersion, Publisher, InstallDate,
+                UninstallString, QuietUninstallString, SystemComponent,
+                PSChildName, @{n='RegistryPath';e={$_.PSPath -replace 'Microsoft.PowerShell.Core\\Registry::',''}} |
+  Export-Csv -Path "$desktop\Uninstall-Export.csv" -NoTypeInformation -Encoding UTF8</pre>
+      </div>
+
+      <div>
+        <div style="font-weight:700; font-size:13px; color:var(--ink); margin-bottom:2px;">Option B · Intune Collect diagnostics</div>
+        <div style="font-size:11px; color:var(--muted); margin-bottom:10px;">HKLM only — the fastest path when you only have Intune access. Per-user HKCU is <strong>not</strong> in the diagnostics bundle, so the <em>Per-user</em> tile will show 0; use Option A if you need HKCU.</div>
+        <ol style="font-size:12px; padding-left:20px; margin:0; color:var(--ink-2); line-height:1.7;">
+          <li>In the Intune admin center, run <strong>Collect diagnostics</strong> on the target device.</li>
+          <li>Download and extract the resulting ZIP.</li>
+          <li>Drop both of these files into the dashboard:
+            <ul style="padding-left:18px; margin-top:4px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11px; line-height:1.6;">
+              <li>(18) RegistryKey HKLM_Software_…_Uninstall export.reg</li>
+              <li>(21) RegistryKey HKLM_SOFTWARE_WOW6432Node_…_Uninstall export.reg</li>
+            </ul>
+          </li>
+        </ol>
+      </div>
+
+    </div>
+  </div>
+  </div><!-- /viewLocal -->
+
+  <div id="viewIntune">
+    <div id="intuneSignedOut" class="signin">
+      <div class="signin-card">
+        <div class="signin-brand">
+          <span class="signin-eyebrow">Microsoft Intune</span>
+          <div class="signin-brand-title">See your whole fleet,<br>not just one device.</div>
+          <p class="signin-brand-sub">One read-only sign-in turns Intune's scattered reports into a single, fast operations console — right in your browser.</p>
+          <div class="signin-covers-label">Everything in one place</div>
+          <div class="signin-grid">
+            <div class="signin-feat"><div class="signin-feat-name">App failures</div><div class="signin-feat-desc">Install errors + AI diagnosis</div></div>
+            <div class="signin-feat"><div class="signin-feat-name">Hardware</div><div class="signin-feat-desc">Fleet inventory &amp; health</div></div>
+            <div class="signin-feat"><div class="signin-feat-name">BitLocker</div><div class="signin-feat-desc">Recovery-key escrow</div></div>
+            <div class="signin-feat"><div class="signin-feat-name">Config drift</div><div class="signin-feat-desc">Baseline compliance</div></div>
+            <div class="signin-feat"><div class="signin-feat-name">Autopilot</div><div class="signin-feat-desc">Enrollment status</div></div>
+            <div class="signin-feat"><div class="signin-feat-name">Remediation</div><div class="signin-feat-desc">Proactive scripts</div></div>
+            <div class="signin-feat"><div class="signin-feat-name">Stale users</div><div class="signin-feat-desc">Dormant accounts</div></div>
+            <div class="signin-feat"><div class="signin-feat-name">Vulnerabilities</div><div class="signin-feat-desc">CVE exposure</div></div>
+            <div class="signin-feat"><div class="signin-feat-name">AI agents</div><div class="signin-feat-desc">Endpoint discovery</div></div>
+            <div class="signin-feat"><div class="signin-feat-name">Posture</div><div class="signin-feat-desc">Compliance &amp; CA audit</div></div>
+            <div class="signin-feat"><div class="signin-feat-name">Metering</div><div class="signin-feat-desc">Real software usage</div></div>
+          </div>
+          <div class="signin-trust">
+            <span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Read-only by default</span>
+            <span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>No app registration</span>
+            <span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>100% client-side</span>
+          </div>
+        </div>
+        <div class="signin-action">
+          <div class="signin-badge">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </div>
+          <div class="signin-title">Sign in to continue</div>
+          <p class="signin-desc">Connect your Microsoft tenant to load Intune reports.</p>
+          <button class="signin-msbtn" id="btnSignIn">
+            <svg width="18" height="18" viewBox="0 0 23 23" aria-hidden="true"><rect x="1"  y="1"  width="10" height="10" fill="#f25022"/><rect x="12" y="1"  width="10" height="10" fill="#7fba00"/><rect x="1"  y="12" width="10" height="10" fill="#00a4ef"/><rect x="12" y="12" width="10" height="10" fill="#ffb900"/></svg>
+            Sign in with Microsoft
+          </button>
+          <div class="signin-specs">
+            <div><div class="signin-spec-k">Reports</div><div class="signin-spec-v">20+ views</div></div>
+            <div><div class="signin-spec-k">Tenants</div><div class="signin-spec-v">Multi / MSP</div></div>
+            <div><div class="signin-spec-k">Sign-in</div><div class="signin-spec-v">Microsoft Entra</div></div>
+            <div><div class="signin-spec-k">License</div><div class="signin-spec-v">Open source</div></div>
+          </div>
+          <div class="signin-action-foot">
+            <span>Read-only · client-side · open source</span>
+            <a href="https://github.com/haavarstein/intune-dashboard" target="_blank" rel="noopener">View the project on GitHub ↗</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="intuneSignedIn" style="display:none;">
+      <div class="auth-bar">
+        <div id="customerSwitcher" style="display:none; position:relative;">
+          <button id="customerSwitcherToggle" class="btn btn-ghost" style="display:inline-flex; align-items:center; gap:6px; font-weight:700;">
+            <span id="customerSwitcherActive">—</span>
+            <span style="font-size:9px;">▾</span>
+          </button>
+          <div id="customerSwitcherMenu" style="display:none; position:absolute; right:0; top:calc(100% + 4px); background:var(--card); border:1px solid var(--line); border-radius:10px; min-width:240px; box-shadow:0 6px 20px rgba(0,0,0,.08); z-index:200; padding:4px 0; overflow:hidden;"></div>
+        </div>
+        <div class="auth-user"><strong id="userName">—</strong></div>
+        <button class="btn btn-ghost" id="btnSignOut">Sign out</button>
+      </div>
+
+      <!-- Single fixed-column grid: every tab keeps a fixed cell, so a
+           scrollbar-width change can never reflow a tab onto another row. -->
+      <div class="subtabs">
+        <button class="subtab active" data-subtab="overview">Overview</button>
+        <button class="subtab" data-subtab="installed">Installed</button>
+        <button class="subtab" data-subtab="approvals">Approvals <span id="approvalsBadge" class="subtab-badge" style="display:none;"></span></button>
+        <button class="subtab" data-subtab="failed">Failed Install</button>
+        <button class="subtab" data-subtab="required">Required Install</button>
+        <button class="subtab" data-subtab="uninstall">Required Uninstall</button>
+        <button class="subtab" data-subtab="metering">Software Metering</button>
+        <button class="subtab" data-subtab="remediation">Remediation</button>
+        <button class="subtab" data-subtab="hardware">Hardware</button>
+        <button class="subtab" data-subtab="diskspace">Disk Space</button>
+        <button class="subtab" data-subtab="appversions">App Versions</button>
+        <button class="subtab" data-subtab="autopilot">Autopilot</button>
+        <button class="subtab" data-subtab="bitlocker">BitLocker</button>
+        <button class="subtab" data-subtab="secureboot">Secure Boot</button>
+        <button class="subtab" data-subtab="certhealth">Management Health</button>
+        <button class="subtab" data-subtab="assignments">Assignments</button>
+        <button class="subtab" data-subtab="posture">Posture</button>
+        <button class="subtab" data-subtab="vulnerabilities">Vulnerabilities (P2/E5)</button>
+        <button class="subtab" data-subtab="drift">Drift &amp; Compliance (P2/E5)</button>
+        <button class="subtab" data-subtab="softdeleted">Soft-Deleted</button>
+        <button class="subtab" data-subtab="staleusers">Stale Users (P1)</button>
+        <button class="subtab" data-subtab="aiagents">AI Agents (P2/E5)</button>
+      </div>
+
+      <div id="intuneError"></div>
+      <div id="intuneNotice"></div>
+
+      <div id="intuneSubFailed" style="display:none;">
+        <div class="tab-hint">Apps with install failures across the fleet, sorted by failure count. Click any error code for an AI-powered diagnosis.</div>
+      <!-- App picker (shown when no app selected) -->
+      <div id="appPicker" class="app-picker">
+        <div class="app-picker-bar">
+          <input type="text" class="search" id="appFilter" placeholder="Search apps by name or publisher…">
+          <div class="filter-group">
+            <span class="filter-group-label">Platform</span>
+            <select class="filter-select" id="appPlatformFilter">
+              <option value="">All</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <span class="filter-group-label">View</span>
+            <select class="filter-select" id="failedViewMode">
+              <option value="apps" selected>By app</option>
+              <option value="errors">By error code</option>
+            </select>
+          </div>
+          <label style="display:flex; align-items:center; gap:6px; font-size:12px; cursor:pointer; color:var(--ink-2);">
+            <input type="checkbox" id="includePmpcFailed"> Include Patch My PC
+          </label>
+          <button class="btn btn-ghost" id="btnReloadApps">↻ Reload apps</button>
+        </div>
+        <div class="app-list" id="appList">
+          <div class="loading">Loading apps…</div>
+        </div>
+        <div id="errorClusterList" style="display:none;">
+          <div id="errorClusterStatus" style="color:var(--muted); font-size:13px; padding:12px;">Switch to this view to aggregate error codes across every failing app — useful for spotting systemic issues (Store offline, App Installer broken) vs app-specific failures.</div>
+          <table id="errorClusterTable" style="display:none;">
+            <thead>
+              <tr>
+                <th data-esort="errorCode">Error code <span class="arrow">▼</span></th>
+                <th data-esort="hexErrorCode">Hex <span class="arrow">▼</span></th>
+                <th data-esort="deviceCount">Devices affected <span class="arrow">▼</span></th>
+                <th data-esort="appCount">Apps affected <span class="arrow">▼</span></th>
+                <th>Sample apps</th>
+              </tr>
+            </thead>
+            <tbody id="errorClusterRows"></tbody>
+          </table>
+          <div class="footer-count" id="errorClusterFooter" style="display:none;"><span id="errorClusterCount">0</span> distinct error codes</div>
+        </div>
+      </div>
+
+      <!-- Failed installs view (shown when app selected) -->
+      <div id="failedView" style="display:none;">
+        <div class="selected-app">
+          <div>
+            <div class="name" id="selAppName">—</div>
+            <div class="meta" id="selAppMeta">—</div>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-ghost" id="btnDetectionRulesFailed">🔍 Detection rule</button>
+            <button class="btn btn-ghost" id="btnChangeApp">← Change app</button>
+          </div>
+        </div>
+
+        <div class="tiles" style="grid-template-columns: repeat(4, 1fr);">
+          <div class="tile tile-bad">
+            <div class="tile-label">Failing devices</div>
+            <div class="tile-value" id="kFailed">0</div>
+            <div class="tile-sub">no session reports installed</div>
+          </div>
+          <div class="tile tile-watch" title="The app is on these devices (≥1 session reports Installed) — the failure rows are per-user-session reporting noise, not missing installs">
+            <div class="tile-label">Installed w/ stale failures</div>
+            <div class="tile-value" id="kNoise">0</div>
+            <div class="tile-sub">on device — failures are session noise</div>
+          </div>
+          <div class="tile">
+            <div class="tile-label">Unique error codes</div>
+            <div class="tile-value" id="kErrCodes">0</div>
+            <div class="tile-sub">distinct failure reasons</div>
+          </div>
+          <div class="tile">
+            <div class="tile-label">User failures</div>
+            <div class="tile-value" id="kUsers">0</div>
+            <div class="tile-sub">distinct users on failed rows</div>
+          </div>
+        </div>
+
+        <div class="table-card">
+          <div class="table-toolbar">
+            <h2>Failed installs</h2>
+            <div class="controls">
+              <input type="text" class="search" id="failedFilter" placeholder="Search device, user, error…">
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnRefresh">↻ Refresh</span>
+            </div>
+          </div>
+          <div id="fiModeHint" style="font-size:12px; color:var(--muted); padding:0 0 10px; line-height:1.5;"></div>
+          <table>
+            <thead>
+              <tr>
+                <th data-sort="AppVersion">Application <span class="arrow">▼</span></th>
+                <th data-sort="AppVersion">Version <span class="arrow">▼</span></th>
+                <th data-sort="Platform">Platform <span class="arrow">▼</span></th>
+                <th data-sort="DeviceName">Device <span class="arrow">▼</span></th>
+                <th data-sort="UserPrincipalName">User <span class="arrow">▼</span></th>
+                <th data-sort="InstallState">State <span class="arrow">▼</span></th>
+                <th data-sort="ErrorCode">Error <span class="arrow">▼</span></th>
+                <th data-sort="LastModifiedDateTime">Last modified <span class="arrow">▼</span></th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="failedRows"></tbody>
+          </table>
+          <div class="footer-count"><span id="failedCount">0</span></div>
+        </div>
+      </div>
+      </div><!-- /intuneSubFailed -->
+
+      <div id="intuneSubOverview">
+        <div class="tab-hint">Tenant health summary for customer-review meetings — totals, refresh attention, top failures, top drift. Auto-loaded on sign-in.</div>
+        <div id="overviewLoading" class="loading" style="padding:24px;">Loading overview…</div>
+        <div id="overviewError"></div>
+        <div id="overviewContent" style="display:none;">
+          <!-- Bento: fleet total is the anchor (spans 2 rows), alert metrics
+               fill the rest; "drifted" runs wide along the bottom. -->
+          <div class="tiles ov-bento">
+            <div class="tile clickable ov-anchor" data-overview-jump="hardware" title="Open Hardware sub-tab" style="grid-area:a; display:flex; flex-direction:column; justify-content:center;">
+              <div class="tile-label">Managed devices</div>
+              <div class="tile-value" id="ovTotalDevices" style="font-size:64px;">0</div>
+              <div class="tile-sub" id="ovTotalDevicesSub">across all platforms</div>
+            </div>
+            <div class="tile tile-watch clickable" data-overview-jump="hardware" title="Open Hardware sub-tab" style="grid-area:b;">
+              <div class="tile-label">Needing attention</div>
+              <div class="tile-value" id="ovAttention">0</div>
+              <div class="tile-sub" id="ovAttentionSub">stale 90+ days or Win 10</div>
+            </div>
+            <div class="tile tile-warn clickable" data-overview-jump="failed" title="Open Failed Install sub-tab" style="grid-area:c;">
+              <div class="tile-label">Apps with failures</div>
+              <div class="tile-value" id="ovFailedApps">0</div>
+              <div class="tile-sub" id="ovFailedAppsSub">FailedDeviceCount &gt; 0</div>
+            </div>
+            <div class="tile tile-watch clickable" data-overview-jump="drift" title="Open Drift & Compliance sub-tab" style="grid-area:d;">
+              <div class="tile-label">Drifted software (P2/E5)</div>
+              <div class="tile-value" id="ovDrift">0</div>
+              <div class="tile-sub" id="ovDriftSub">components with &gt;20% drift</div>
+            </div>
+          </div>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px;">
+            <div class="table-card">
+              <div class="table-toolbar">
+                <h2>Top failing apps</h2>
+                <div class="controls">
+                  <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" data-overview-jump="failed">View all →</span>
+                </div>
+              </div>
+              <table>
+                <thead><tr><th>App</th><th>Publisher</th><th>Failed devices</th></tr></thead>
+                <tbody id="ovFailedAppsList"></tbody>
+              </table>
+            </div>
+
+            <div class="table-card">
+              <div class="table-toolbar">
+                <h2>Top drifted software</h2>
+                <div class="controls">
+                  <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" data-overview-jump="drift">View all →</span>
+                </div>
+              </div>
+              <table>
+                <thead><tr><th>Software</th><th>Drift %</th><th>Drifted devices</th></tr></thead>
+                <tbody id="ovDriftList"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div><!-- /intuneSubOverview -->
+
+      <div id="intuneSubInstalled" style="display:none;">
+        <div class="tab-hint">Find which devices have a given app, with per-device version and state. Export the device list for targeted upgrades or exclusion groups.</div>
+        <!-- App picker (shown when no app selected) -->
+        <div id="installedAppPicker" class="app-picker">
+          <div class="tiles" id="installedTiles" style="grid-template-columns: repeat(2, 1fr); display:none; margin-bottom:16px;">
+            <div class="tile">
+              <div class="tile-label">Assigned apps</div>
+              <div class="tile-value" id="instTileTotal">0</div>
+              <div class="tile-sub">in this tenant</div>
+            </div>
+            <div class="tile" id="instTileZero" style="cursor:pointer;" title="Filter: assigned 30+ days ago but installed on zero devices — retire candidates">
+              <div class="tile-label">Zero installs</div>
+              <div class="tile-value" id="instTileZeroVal">…</div>
+              <div class="tile-sub">assigned 30+ days · installed nowhere</div>
+            </div>
+          </div>
+          <div class="app-picker-bar">
+            <input type="text" class="search" id="installedAppFilter" placeholder="Search apps by name or publisher…">
+            <div class="filter-group">
+              <span class="filter-group-label">Platform</span>
+              <select class="filter-select" id="installedAppPlatformFilter">
+                <option value="">All</option>
+              </select>
+            </div>
+            <label style="display:flex; align-items:center; gap:6px; font-size:12px; cursor:pointer; color:var(--ink-2);">
+              <input type="checkbox" id="includePmpcInstalled"> Include Patch My PC
+            </label>
+            <button class="btn btn-ghost" id="btnReloadInstalledApps">↻ Reload apps</button>
+          </div>
+          <div class="app-list no-scroll" id="installedAppList">
+            <div class="loading">Loading apps…</div>
+          </div>
+          <div class="pager" id="installedAppsPager"></div>
+        </div>
+
+        <div id="installedView" style="display:none;">
+          <div class="selected-app">
+            <div>
+              <div class="name" id="instAppName">—</div>
+              <div class="meta" id="instAppMeta">—</div>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button class="btn btn-ghost" id="btnDetectionRulesInstalled">🔍 Detection rule</button>
+              <button class="btn btn-danger" id="btnDeleteApp">🗑 Delete from Intune</button>
+              <button class="btn btn-ghost" id="btnChangeAppInstalled">← Change app</button>
+            </div>
+          </div>
+
+          <div class="assignments-card" id="instAssignmentsCard">
+            <div class="assignments-header">Assigned to</div>
+            <div id="instAssignmentsBody"><div class="loading">Loading assignments…</div></div>
+          </div>
+
+          <div class="table-card">
+            <div class="table-toolbar">
+              <h2>Installed devices</h2>
+              <div class="controls">
+                <input type="text" class="search" id="installedFilter" placeholder="Search device, user…">
+                <select class="filter-select" id="installedStateFilter">
+                  <option value="">All states</option>
+                </select>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnCopyInstalled">⧉ Copy device names</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnExportInstalled">⬇ Export CSV</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnRefreshInstalled">↻ Refresh</span>
+              </div>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th data-sort-inst="DeviceName">Device <span class="arrow">▼</span></th>
+                  <th data-sort-inst="UserPrincipalName">User <span class="arrow">▼</span></th>
+                  <th data-sort-inst="AppVersion">Version <span class="arrow">▼</span></th>
+                  <th data-sort-inst="InstallState">State <span class="arrow">▼</span></th>
+                  <th data-sort-inst="Platform">Platform <span class="arrow">▼</span></th>
+                  <th data-sort-inst="LastModifiedDateTime">Last modified <span class="arrow">▼</span></th>
+                </tr>
+              </thead>
+              <tbody id="installedRows"></tbody>
+            </table>
+            <div class="footer-count"><span id="installedCount">0</span> devices</div>
+          </div>
+        </div>
+      </div><!-- /intuneSubInstalled -->
+
+      <div id="intuneSubApprovals" style="display:none;">
+        <div class="tab-hint">Multi-Admin Approval queue for this tenant — every pending and recent approval request across apps, scripts, configurations, and device actions. Approve or reject inline; no admin-center context switch.</div>
+        <div class="tiles">
+          <div class="tile tile-watch" data-approvals-tile="needsApproval" style="cursor:pointer;">
+            <div class="tile-label">Pending Approval</div>
+            <div class="tile-value" id="apTilePendingApproval">0</div>
+            <div class="tile-sub">awaiting an approver</div>
+          </div>
+          <div class="tile tile-warn" data-approvals-tile="approved" style="cursor:pointer;">
+            <div class="tile-label">Pending Completion</div>
+            <div class="tile-value" id="apTilePendingCompletion">0</div>
+            <div class="tile-sub">approved — requestor must complete</div>
+          </div>
+          <div class="tile tile-good" data-approvals-tile="completed" style="cursor:pointer;">
+            <div class="tile-label">Completed</div>
+            <div class="tile-value" id="apTileApproved">0</div>
+            <div class="tile-sub">last 7 days</div>
+          </div>
+          <div class="tile" data-approvals-tile="rejected" style="cursor:pointer;">
+            <div class="tile-label">Rejected</div>
+            <div class="tile-value" id="apTileRejected">0</div>
+            <div class="tile-sub">last 7 days</div>
+          </div>
+          <div class="tile tile-warn" data-approvals-tile="expired" style="cursor:pointer;">
+            <div class="tile-label">Expired</div>
+            <div class="tile-value" id="apTileExpired">0</div>
+            <div class="tile-sub">last 7 days</div>
+          </div>
+          <div class="tile" title="Share of last-7-days requests that received a decision (approved or rejected). Pending and expired count as no decision. Green ≥ 90%, yellow ≥ 75%, red below.">
+            <div class="tile-label">Resolution rate</div>
+            <div style="display:flex; align-items:center; gap:14px;">
+              <svg width="48" height="48" viewBox="0 0 50 50" style="flex-shrink:0;" aria-hidden="true">
+                <circle cx="25" cy="25" r="20" fill="none" stroke="var(--line)" stroke-width="5"/>
+                <circle id="aprResRing" cx="25" cy="25" r="20" fill="none" stroke="#1f7a3a" stroke-width="5"
+                        stroke-dasharray="125.66" stroke-dashoffset="125.66"
+                        transform="rotate(-90 25 25)" stroke-linecap="round"
+                        style="transition: stroke-dashoffset .6s ease, stroke .2s ease;"/>
+              </svg>
+              <div>
+                <div class="tile-value" id="aprResRate" style="font-size:30px;">—</div>
+                <div class="tile-sub" style="margin-top:4px;">decided / seen</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="table-card">
+          <div class="table-toolbar">
+            <h2>Approval queue</h2>
+            <div class="controls">
+              <input type="text" class="search" id="approvalsFilter" placeholder="Search requestor, justification, type…">
+              <select class="filter-select" id="approvalsStatusFilter">
+                <option value="" selected>All statuses</option>
+                <option value="pending">Needs action</option>
+                <option value="needsApproval">Needs approval</option>
+                <option value="approved">Needs completion</option>
+                <option value="completed">Completed</option>
+                <option value="rejected">Rejected</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="expired">Expired</option>
+              </select>
+              <select class="filter-select" id="approvalsTypeFilter">
+                <option value="">All types</option>
+              </select>
+              <span style="cursor:pointer; color:#1f5d33; font-weight:600; font-size:13px; display:none;" id="btnApprovalsApproveSel" title="Approve all selected pending requests">✓ Approve selected</span>
+              <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px; display:none;" id="btnApprovalsRejectSel" title="Reject all selected pending requests">✗ Reject selected</span>
+              <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px; display:none;" id="btnApprovalsCancelSel" title="Cancel all selected pending requests">⊘ Cancel selected</span>
+              <span style="cursor:pointer; color:#1f5d33; font-weight:600; font-size:13px; display:none;" id="btnApprovalsCompleteSel" title="Mark all selected approved requests as complete">✔ Complete selected</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnApprovalsClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnApprovalsRefresh">↻ Refresh</span>
+            </div>
+          </div>
+          <div id="approvalsLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading approval queue…</div>
+          <div id="approvalsError"></div>
+          <div id="approvalsContent" style="display:none;">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:26px;"><input type="checkbox" id="apSelectAll" title="Select / deselect all filtered requests" style="cursor:pointer;"></th>
+                  <th data-asort="requestor">Requestor <span class="arrow">▼</span></th>
+                  <th data-asort="type">Type <span class="arrow">▼</span></th>
+                  <th data-asort="status">Status <span class="arrow">▼</span></th>
+                  <th data-asort="requestDateTime">Requested <span class="arrow">▼</span></th>
+                  <th data-asort="lastModifiedDateTime">Last updated <span class="arrow">▼</span></th>
+                  <th>Justification</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="approvalsRowsBody"></tbody>
+            </table>
+            <div class="footer-count"><span id="approvalsCount">0</span> requests shown</div>
+          </div>
+        </div>
+      </div><!-- /intuneSubApprovals -->
+
+      <div id="intuneSubRequired" style="display:none;">
+        <div class="tab-hint">Win32 apps with a <strong>Required</strong> assignment to All Devices and/or All Users. Columns: app, publisher, platform, install context (<strong>SYSTEM</strong> / <strong>USER</strong>), and assignment target. Click the app name to open it in the Intune admin center.</div>
+        <div id="requiredError"></div>
+        <div class="table-card">
+          <div class="table-toolbar">
+            <h2>Required Install</h2>
+            <div class="controls">
+              <input type="text" class="search" id="requiredFilter" placeholder="Search name or publisher…">
+              <select class="filter-select" id="requiredTargetFilter" title="Required assignment target">
+                <option value="allDevices" selected>All Devices</option>
+                <option value="allUsers">All Users</option>
+                <option value="">Either target</option>
+              </select>
+              <select class="filter-select" id="requiredContextFilter" title="Win32 install context">
+                <option value="">All contexts</option>
+                <option value="system">SYSTEM</option>
+                <option value="user">USER</option>
+              </select>
+              <button class="btn btn-ghost" id="btnReloadRequired">↻ Reload</button>
+            </div>
+          </div>
+          <div id="requiredList"><div class="loading" style="padding:24px;">Loading required apps…</div></div>
+          <div class="footer-count"><span id="requiredCount">0</span> required apps</div>
+        </div>
+      </div><!-- /intuneSubRequired -->
+
+      <div id="intuneSubUninstall" style="display:none;">
+        <div class="tab-hint">Apps with an <strong>Uninstall</strong> assignment to a group. Columns: app, publisher, platform, install context, and group assignment count.</div>
+        <div id="uninstallError"></div>
+        <div class="table-card">
+          <div class="table-toolbar">
+            <h2>Required Uninstall</h2>
+            <div class="controls">
+              <input type="text" class="search" id="uninstallFilter" placeholder="Search name or publisher…">
+              <select class="filter-select" id="uninstallPlatformFilter" title="Platform">
+                <option value="">All platforms</option>
+              </select>
+              <select class="filter-select" id="uninstallContextFilter" title="Win32 install context">
+                <option value="">All contexts</option>
+                <option value="system">SYSTEM</option>
+                <option value="user">USER</option>
+                <option value="unknown">Unknown / N/A</option>
+              </select>
+              <button class="btn btn-ghost" id="btnReloadUninstall">↻ Reload</button>
+            </div>
+          </div>
+          <div id="uninstallList"><div class="loading" style="padding:24px;">Loading uninstall apps…</div></div>
+          <div class="footer-count"><span id="uninstallCount">0</span> uninstall apps</div>
+        </div>
+      </div><!-- /intuneSubUninstall -->
+
+      <div id="intuneSubHardware" style="display:none;">
+        <div class="tab-hint">Managed-device inventory for Win11 readiness, post-EOS Win10 cleanup, and stale-device refresh planning. Tile filters + CSV export for Entra-group import. On large tenants, device list + storage load first; RAM is backfilled in the background (or skipped if slim mode is on in Settings).</div>
+        <div id="hwLoading" class="loading" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+          <span id="hwLoadingText">Loading devices…</span>
+          <span id="btnHwCancel" style="display:none; cursor:pointer; color:var(--danger); font-weight:600; font-size:13px;" title="Stop the current Graph walk">✕ Cancel</span>
+        </div>
+        <div id="hwError"></div>
+        <div id="hwContent" style="display:none;">
+          <div class="hw-overview">
+            <div class="hw-tiles">
+              <div class="tile" title="Windows 11 share of Windows fleet — green ≥ 85%, yellow ≥ 50%, red below">
+                <div class="tile-label">Modern OS rate</div>
+                <div style="display:flex; align-items:center; gap:14px;">
+                  <svg width="48" height="48" viewBox="0 0 50 50" style="flex-shrink:0;" aria-hidden="true">
+                    <circle cx="25" cy="25" r="20" fill="none" stroke="var(--line)" stroke-width="5"/>
+                    <circle id="hwOsRing" cx="25" cy="25" r="20" fill="none" stroke="#1f7a3a" stroke-width="5"
+                            stroke-dasharray="125.66" stroke-dashoffset="125.66"
+                            transform="rotate(-90 25 25)" stroke-linecap="round"
+                            style="transition: stroke-dashoffset .6s ease, stroke .2s ease;"/>
+                  </svg>
+                  <div>
+                    <div class="tile-value" id="hwOsRate" style="font-size:30px;">—</div>
+                    <div class="tile-sub" style="margin-top:4px;">on Windows 11</div>
+                  </div>
+                </div>
+              </div>
+              <div class="tile tile-warn clickable" id="hwWin10Tile" title="Click to filter to Windows 10 devices">
+                <div class="tile-label">Windows 10</div>
+                <div class="tile-value" id="hwWin10">0</div>
+                <div class="tile-sub">Past EOS · Oct 2025</div>
+              </div>
+              <div class="tile tile-good clickable" id="hwWin11Tile" title="Click to filter to Windows 11 devices">
+                <div class="tile-label">Windows 11</div>
+                <div class="tile-value" id="hwWin11">0</div>
+                <div class="tile-sub">&nbsp;</div>
+              </div>
+              <div class="tile tile-watch clickable" id="hwStaleTile" title="Click to filter to devices not synced in 90+ days">
+                <div class="tile-label">Stale 90+ days</div>
+                <div class="tile-value" id="hwStale">0</div>
+                <div class="tile-sub">no check-in for 90 days+</div>
+              </div>
+              <div class="tile tile-warn clickable" id="hwRam4Tile" title="Click to filter to 4GB RAM devices">
+                <div class="tile-label">4GB RAM</div>
+                <div class="tile-value" id="hwRam4">0</div>
+                <div class="tile-sub">≤ 4GB installed</div>
+              </div>
+              <div class="tile clickable" id="hwRam8Tile" title="Click to filter to 8GB RAM devices">
+                <div class="tile-label">8GB RAM</div>
+                <div class="tile-value" id="hwRam8">0</div>
+                <div class="tile-sub">8GB installed</div>
+              </div>
+              <div class="tile clickable" id="hwRam16Tile" title="Click to filter to 16GB RAM devices">
+                <div class="tile-label">16GB RAM</div>
+                <div class="tile-value" id="hwRam16">0</div>
+                <div class="tile-sub">16GB installed</div>
+              </div>
+              <div class="tile clickable" id="hwRam32Tile" title="Click to filter to 32+ GB RAM devices">
+                <div class="tile-label">32+ GB RAM</div>
+                <div class="tile-value" id="hwRam32">0</div>
+                <div class="tile-sub">≥ 32GB installed</div>
+              </div>
+              <div class="tile tile-warn clickable" id="hwStor64Tile" title="Click to filter to ≤64GB storage devices">
+                <div class="tile-label">64GB Storage</div>
+                <div class="tile-value" id="hwStor64">0</div>
+                <div class="tile-sub">≤ 64GB total</div>
+              </div>
+              <div class="tile clickable" id="hwStor128Tile" title="Click to filter to 128GB storage devices">
+                <div class="tile-label">128GB Storage</div>
+                <div class="tile-value" id="hwStor128">0</div>
+                <div class="tile-sub">128GB total</div>
+              </div>
+              <div class="tile clickable" id="hwStor256Tile" title="Click to filter to 256GB storage devices">
+                <div class="tile-label">256GB Storage</div>
+                <div class="tile-value" id="hwStor256">0</div>
+                <div class="tile-sub">256GB total</div>
+              </div>
+              <div class="tile clickable" id="hwStor512Tile" title="Click to filter to 512+ GB storage devices">
+                <div class="tile-label">512+ GB Storage</div>
+                <div class="tile-value" id="hwStor512">0</div>
+                <div class="tile-sub">≥ 512GB total</div>
+              </div>
+              <div class="tile tile-warn clickable" id="hwDupSerialTile" title="Click to filter to duplicate-serial-number devices (the same physical machine enrolled multiple times)">
+                <div class="tile-label">Duplicate serial</div>
+                <div class="tile-value" id="hwDupSerial">0</div>
+                <div class="tile-sub">same serial on 2+ records</div>
+              </div>
+              <div class="tile tile-watch clickable" id="hwMissingEntraTile" title="Click to filter to devices in Intune that don't have a matching Entra device record">
+                <div class="tile-label">Missing from Entra</div>
+                <div class="tile-value" id="hwMissingEntra">0</div>
+                <div class="tile-sub">no Entra match</div>
+              </div>
+              <div class="tile tile-watch clickable" id="hwNoUserTile" title="Click to filter to devices with no primary user assigned (possible orphan or shared device)">
+                <div class="tile-label">No primary user</div>
+                <div class="tile-value" id="hwNoUser">0</div>
+                <div class="tile-sub">empty UPN</div>
+              </div>
+            </div>
+            <div class="donut-card">
+              <div id="hwDonut"></div>
+              <div class="donut-legend" id="hwDonutLegend"></div>
+            </div>
+          </div>
+
+          <div class="table-card">
+            <div class="table-toolbar">
+              <h2>Hardware inventory</h2>
+              <div class="controls">
+                <input type="text" class="search" id="hwFilter" placeholder="Search device, user, model…">
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnHwClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnHwExport" title="Export currently filtered rows to CSV">⬇ Export CSV</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnHwRefresh">↻ Refresh</span>
+              </div>
+            </div>
+            <div class="filter-bar">
+              <div class="filter-group">
+                <span class="filter-group-label">Platform</span>
+                <select class="filter-select" id="hwPlatformFilter">
+                  <option value="">All</option>
+                </select>
+              </div>
+              <div class="filter-group">
+                <span class="filter-group-label">RAM</span>
+                <select class="filter-select" id="hwRamFilter">
+                  <option value="">All</option>
+                  <option value="le4">≤ 4 GB</option>
+                  <option value="8">8 GB</option>
+                  <option value="16">16 GB</option>
+                  <option value="ge32">32+ GB</option>
+                </select>
+              </div>
+              <div class="filter-group">
+                <span class="filter-group-label">Storage</span>
+                <select class="filter-select" id="hwStorageFilter">
+                  <option value="">All</option>
+                  <option value="le64">≤ 64 GB</option>
+                  <option value="128">128 GB</option>
+                  <option value="256">256 GB</option>
+                  <option value="ge512">512+ GB</option>
+                </select>
+              </div>
+              <div class="filter-group">
+                <span class="filter-group-label">Manufacturer</span>
+                <select class="filter-select" id="hwManufacturerFilter">
+                  <option value="">All</option>
+                </select>
+              </div>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th data-sort="deviceName">Device Name <span class="arrow">▼</span></th>
+                  <th data-sort="manufacturer">Manufacturer <span class="arrow">▼</span></th>
+                  <th data-sort="model">Model <span class="arrow">▼</span></th>
+                  <th data-sort="ramGB">RAM (GB) <span class="arrow">▼</span></th>
+                  <th data-sort="totalGB">Total (GB) <span class="arrow">▼</span></th>
+                  <th data-sort="freeGB">Free (GB) <span class="arrow">▼</span></th>
+                  <th data-sort="osVersion">Windows <span class="arrow">▼</span></th>
+                  <th data-sort="lastSync">Last Check-in <span class="arrow">▼</span></th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="hwRows"></tbody>
+            </table>
+            <div class="footer-count"><span id="hwCount">0</span> devices shown</div>
+          </div>
+        </div>
+      </div><!-- /intuneSubHardware -->
+
+      <div id="intuneSubAutopilot" style="display:none;">
+        <div class="tab-hint">Autopilot reconciliation — find Autopilot device records still registered after their Intune device was retired or reimaged, devices in Autopilot that haven't been assigned a deployment profile, and duplicate Entra device objects pointing at the same Autopilot identity. Hybrid-by-design duplicates (one Entra-joined + one hybrid-joined record per device) are hidden by default.</div>
+        <div class="tiles ap-tiles">
+          <a class="tile ap-portal-tile" href="https://intune.microsoft.com/#view/Microsoft_Intune_Enrollment/AutopilotDevicesBlade" target="_blank" rel="noopener noreferrer" title="Open classic Windows Autopilot devices in Intune">
+            <div class="tile-label">Autopilot v1</div>
+            <div class="tile-value" id="apTileV1">0</div>
+            <div class="tile-sub">devices</div>
+          </a>
+          <a class="tile ap-portal-tile" href="https://intune.microsoft.com/#view/Microsoft_Intune_Enrollment/AutopilotDevicesV2.ReactView/isReactView~/true" target="_blank" rel="noopener noreferrer" title="Open Autopilot device preparation devices in Intune">
+            <div class="tile-label">Autopilot v2</div>
+            <div class="tile-value" id="apTileV2">—</div>
+            <div class="tile-sub">devices</div>
+          </a>
+          <div class="tile tile-bad" data-ap-tile="orphan" style="cursor:pointer;" title="Filter: orphaned (no Intune device)">
+            <div class="tile-label">Orphan</div>
+            <div class="tile-value" id="apTileOrphan">0</div>
+            <div class="tile-sub">no managed device</div>
+          </div>
+          <div class="tile tile-warn" data-ap-tile="noProfile" style="cursor:pointer;" title="Filter: no deployment profile assigned">
+            <div class="tile-label">No profile</div>
+            <div class="tile-value" id="apTileNoProfile">0</div>
+            <div class="tile-sub">profile unassigned</div>
+          </div>
+          <div class="tile tile-watch" data-ap-tile="duplicate" style="cursor:pointer;" title="Filter: duplicate Entra device objects">
+            <div class="tile-label">Duplicate Entra</div>
+            <div class="tile-value" id="apTileDuplicate">0</div>
+            <div class="tile-sub">≥ 2 Entra records</div>
+          </div>
+          <div class="tile" title="Share of Autopilot devices with no orphan / profile / duplicate flags — green ≥ 95%, yellow ≥ 80%, red below">
+            <div class="tile-label">Autopilot health</div>
+            <div style="display:flex; align-items:center; gap:14px;">
+              <svg width="48" height="48" viewBox="0 0 50 50" style="flex-shrink:0;" aria-hidden="true">
+                <circle cx="25" cy="25" r="20" fill="none" stroke="var(--line)" stroke-width="5"/>
+                <circle id="apHealthRing" cx="25" cy="25" r="20" fill="none" stroke="#1f7a3a" stroke-width="5"
+                        stroke-dasharray="125.66" stroke-dashoffset="125.66"
+                        transform="rotate(-90 25 25)" stroke-linecap="round"
+                        style="transition: stroke-dashoffset .6s ease, stroke .2s ease;"/>
+              </svg>
+              <div>
+                <div class="tile-value" id="apHealthRate" style="font-size:30px;">—</div>
+                <div class="tile-sub" style="margin-top:4px;">clean records</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="table-card">
+          <div class="table-toolbar">
+            <h2>Autopilot devices</h2>
+            <div class="controls">
+              <input type="text" class="search" id="autopilotFilter" placeholder="Search serial, model, group tag…">
+              <select class="filter-select" id="autopilotStateFilter">
+                <option value="" selected>All devices</option>
+                <option value="orphan">Orphan: no managed device</option>
+                <option value="noProfile">No profile</option>
+                <option value="duplicate">Duplicate Entra</option>
+                <option value="ok">OK</option>
+              </select>
+              <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); cursor:pointer;" title="Hybrid Autopilot enrollment legitimately creates one Entra-joined + one hybrid-joined record per device. Default ON ignores those.">
+                <input type="checkbox" id="autopilotHideHybrid" checked> Hide hybrid-by-design duplicates
+              </label>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnAutopilotClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAutopilotDeviceLink" title="Pull the DeviceLink CSV Intune needs before a device preparation name template can apply">Device Link CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnAutopilotSelectAll" title="Select every orphan shown in the table">Select all</span>
+              <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px; display:none;" id="btnAutopilotDelete" title="Delete the selected Autopilot registrations. The managed device is already gone.">🗑 Delete selected</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAutopilotExport">⬇ Export CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAutopilotRefresh">↻ Refresh</span>
+            </div>
+          </div>
+          <div id="autopilotLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading Autopilot data…</div>
+          <div id="autopilotError"></div>
+          <div id="autopilotContent" style="display:none;">
+            <table>
+              <thead>
+                <tr>
+                  <th id="apSelectCol" style="width:36px; display:none;"><input type="checkbox" id="autopilotSelectAll" title="Select all shown orphans" style="cursor:pointer;"></th>
+                  <th data-apsort="serialNumber">Serial <span class="arrow">▼</span></th>
+                  <th data-apsort="manufacturer">Manufacturer <span class="arrow">▼</span></th>
+                  <th data-apsort="model">Model <span class="arrow">▼</span></th>
+                  <th data-apsort="groupTag">Group tag <span class="arrow">▼</span></th>
+                  <th data-apsort="purchaseOrderIdentifier">PO <span class="arrow">▼</span></th>
+                  <th data-apsort="assignmentStatus">Profile <span class="arrow">▼</span></th>
+                  <th data-apsort="lastContactedDateTime">Last contact <span class="arrow">▼</span></th>
+                  <th data-apsort="state">Status <span class="arrow">▼</span></th>
+                </tr>
+              </thead>
+              <tbody id="autopilotRowsBody"></tbody>
+            </table>
+            <div class="footer-count"><span id="autopilotCount">0</span> devices shown</div>
+          </div>
+        </div>
+      </div><!-- /intuneSubAutopilot -->
+
+      <div id="intuneSubBitlocker" style="display:none;">
+        <div class="tab-hint">BitLocker escrow audit — Windows devices that report as encrypted in Intune cross-referenced with recovery keys actually backed up in Entra. Split into three risk tiers: <strong>Encrypted + Key</strong> (fully protected), <strong>Encrypted, no key</strong> (critical — real data-loss risk if the drive fails), and <strong>Not encrypted</strong> (policy non-compliance).</div>
+        <div class="tiles">
+          <div class="tile" data-bl-tile="" style="cursor:pointer;" title="Show all devices">
+            <div class="tile-label">Windows devices</div>
+            <div class="tile-value" id="blTileTotal">0</div>
+            <div class="tile-sub">in scope</div>
+          </div>
+          <div class="tile tile-good" data-bl-tile="encrypted-with-key" style="cursor:pointer;" title="Filter: encrypted devices with a recovery key escrowed in Entra">
+            <div class="tile-label">Encrypted + Key</div>
+            <div class="tile-value" id="blTileSafe">0</div>
+            <div class="tile-sub">fully protected</div>
+          </div>
+          <div class="tile tile-bad" data-bl-tile="gap" style="cursor:pointer;" title="Filter: encrypted in Intune but zero recovery keys in Entra — real data-loss risk">
+            <div class="tile-label">Encrypted, no key</div>
+            <div class="tile-value" id="blTileGap">0</div>
+            <div class="tile-sub">critical — no recovery</div>
+          </div>
+          <div class="tile tile-warn" data-bl-tile="not-encrypted" style="cursor:pointer;" title="Filter: devices not encrypted (policy non-compliance)">
+            <div class="tile-label">Not encrypted</div>
+            <div class="tile-value" id="blTileNotEnc">0</div>
+            <div class="tile-sub">policy gap</div>
+          </div>
+          <div class="tile" title="Key Escrow Success Rate — share of encrypted devices that also have a recovery key escrowed in Entra">
+            <div class="tile-label">Key escrow rate</div>
+            <div style="display:flex; align-items:center; gap:14px;">
+              <svg width="48" height="48" viewBox="0 0 50 50" style="flex-shrink:0;" aria-hidden="true">
+                <circle cx="25" cy="25" r="20" fill="none" stroke="var(--line)" stroke-width="5"/>
+                <circle id="blEscrowRing" cx="25" cy="25" r="20" fill="none" stroke="#1f5d33" stroke-width="5"
+                        stroke-dasharray="125.66" stroke-dashoffset="125.66"
+                        transform="rotate(-90 25 25)" stroke-linecap="round"
+                        style="transition: stroke-dashoffset .6s ease, stroke .2s ease;"/>
+              </svg>
+              <div>
+                <div class="tile-value" id="blTileRate" style="font-size:30px;">—</div>
+                <div class="tile-sub" style="margin-top:4px;">of encrypted</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="table-card">
+          <div class="table-toolbar">
+            <h2>Devices</h2>
+            <div class="controls">
+              <input type="text" class="search" id="bitlockerFilter" placeholder="Search device, user, model…">
+              <select class="filter-select" id="bitlockerStateFilter">
+                <option value="" selected>All devices</option>
+                <option value="encrypted-with-key">Encrypted + Key (safe)</option>
+                <option value="gap">Encrypted, no key (critical)</option>
+                <option value="not-encrypted">Not encrypted</option>
+                <option value="encrypted-any">Encrypted (any)</option>
+                <option value="key-escrowed-any">Keys escrowed</option>
+                <option value="no-entra-link">No Entra device link</option>
+              </select>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnBitlockerClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnBitlockerExport">⬇ Export CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnBitlockerRefresh">↻ Refresh</span>
+            </div>
+          </div>
+          <div id="bitlockerLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading BitLocker state…</div>
+          <div id="bitlockerError"></div>
+          <div id="bitlockerContent" style="display:none;">
+            <table>
+              <thead>
+                <tr>
+                  <th data-bsort="deviceName">Device <span class="arrow">▼</span></th>
+                  <th data-bsort="userPrincipalName">User <span class="arrow">▼</span></th>
+                  <th data-bsort="osVersion">Windows <span class="arrow">▼</span></th>
+                  <th data-bsort="model">Model <span class="arrow">▼</span></th>
+                  <th data-bsort="encryptionState">Encrypted (Intune) <span class="arrow">▼</span></th>
+                  <th data-bsort="keyCount">Keys escrowed <span class="arrow">▼</span></th>
+                  <th data-bsort="lastSync">Last check-in <span class="arrow">▼</span></th>
+                </tr>
+              </thead>
+              <tbody id="bitlockerRowsBody"></tbody>
+            </table>
+            <div class="footer-count"><span id="bitlockerCount">0</span> devices shown</div>
+          </div>
+        </div>
+      </div><!-- /intuneSubBitlocker -->
+
+      <div id="intuneSubSecureboot" style="display:none;">
+        <div class="tab-hint">
+          Secure Boot readiness for the Windows fleet — is Secure Boot <strong>enabled</strong> on each device (from Intune <code>deviceHealthAttestationState.secureBoot</code>).
+          Full <strong>2023 certificate / trust / confidence</strong> columns live in the Autopatch portal report (not exposed on public Graph yet) —
+          <a href="https://learn.microsoft.com/en-us/windows/deployment/windows-autopatch/monitor/secure-boot-status-report" target="_blank" rel="noopener noreferrer">Secure Boot status report docs</a>
+          · Intune → Reports → Windows Autopatch → Windows quality updates → Secure Boot status.
+          Devices without DHA data show as <strong>Unknown</strong> (health attestation not reported, or not Windows DHA-capable).
+        </div>
+        <div class="tiles">
+          <div class="tile" data-sb-tile="" style="cursor:pointer;" title="Show all Windows devices">
+            <div class="tile-label">Windows devices</div>
+            <div class="tile-value" id="sbTileTotal">0</div>
+            <div class="tile-sub">in scope</div>
+          </div>
+          <div class="tile tile-good" data-sb-tile="enabled" style="cursor:pointer;" title="Filter: Secure Boot enabled">
+            <div class="tile-label">Secure Boot on</div>
+            <div class="tile-value" id="sbTileOn">0</div>
+            <div class="tile-sub">DHA reports enabled</div>
+          </div>
+          <div class="tile tile-bad" data-sb-tile="disabled" style="cursor:pointer;" title="Filter: Secure Boot disabled">
+            <div class="tile-label">Secure Boot off</div>
+            <div class="tile-value" id="sbTileOff">0</div>
+            <div class="tile-sub">DHA reports disabled</div>
+          </div>
+          <div class="tile tile-watch" data-sb-tile="unknown" style="cursor:pointer;" title="Filter: no DHA Secure Boot signal">
+            <div class="tile-label">Unknown</div>
+            <div class="tile-value" id="sbTileUnknown">0</div>
+            <div class="tile-sub">no attestation data</div>
+          </div>
+          <div class="tile" title="Share of devices with known state that have Secure Boot enabled">
+            <div class="tile-label">SB enabled rate</div>
+            <div style="display:flex; align-items:center; gap:14px;">
+              <svg width="48" height="48" viewBox="0 0 50 50" style="flex-shrink:0;" aria-hidden="true">
+                <circle cx="25" cy="25" r="20" fill="none" stroke="var(--line)" stroke-width="5"/>
+                <circle id="sbRateRing" cx="25" cy="25" r="20" fill="none" stroke="#1f7a3a" stroke-width="5"
+                        stroke-dasharray="125.66" stroke-dashoffset="125.66"
+                        transform="rotate(-90 25 25)" stroke-linecap="round"
+                        style="transition: stroke-dashoffset .6s ease, stroke .2s ease;"/>
+              </svg>
+              <div>
+                <div class="tile-value" id="sbRate" style="font-size:30px;">—</div>
+                <div class="tile-sub" style="margin-top:4px;">of known</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="table-card">
+          <div class="table-toolbar">
+            <h2>Devices</h2>
+            <div class="controls">
+              <input type="text" class="search" id="securebootFilter" placeholder="Search device, user, model…">
+              <select class="filter-select" id="securebootStateFilter">
+                <option value="" selected>All states</option>
+                <option value="enabled">Secure Boot on</option>
+                <option value="disabled">Secure Boot off</option>
+                <option value="unknown">Unknown</option>
+              </select>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnSecurebootClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnSecurebootExport">⬇ Export CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnSecurebootRefresh">↻ Refresh</span>
+              <span id="btnSecurebootCancel" style="display:none; cursor:pointer; color:var(--danger); font-weight:600; font-size:13px;" title="Stop DHA fan-out">✕ Cancel</span>
+            </div>
+          </div>
+          <div id="securebootLoading" class="loading" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:12px;">
+            <span id="securebootLoadingText">Loading devices…</span>
+          </div>
+          <div id="securebootError"></div>
+          <div id="securebootNotice"></div>
+          <div id="securebootContent" style="display:none;">
+            <div class="table-scroll">
+              <table class="app-assign-table">
+                <thead>
+                  <tr>
+                    <th data-sbsort="deviceName">Device <span class="arrow">▼</span></th>
+                    <th data-sbsort="userPrincipalName">User <span class="arrow">▼</span></th>
+                    <th data-sbsort="osVersion">Windows <span class="arrow">▼</span></th>
+                    <th data-sbsort="manufacturer">Manufacturer <span class="arrow">▼</span></th>
+                    <th data-sbsort="model">Model <span class="arrow">▼</span></th>
+                    <th data-sbsort="secureBoot">Secure Boot <span class="arrow">▼</span></th>
+                    <th data-sbsort="tpmVersion">TPM <span class="arrow">▼</span></th>
+                    <th data-sbsort="lastSync">Last check-in <span class="arrow">▼</span></th>
+                  </tr>
+                </thead>
+                <tbody id="securebootRowsBody"></tbody>
+              </table>
+            </div>
+            <div class="footer-count"><span id="securebootCount">0</span> devices shown</div>
+          </div>
+        </div>
+      </div><!-- /intuneSubSecureboot -->
+
+      <div id="intuneSubCerthealth" style="display:none;">
+        <div class="tab-hint">Intune management health, derived from the MDM certificate lifecycle. A Windows device whose management certificate has expired can still look perfectly healthy in the Intune portal — compliant, recently synced, online — while Win32 apps, remediation scripts and every other IME-driven workload silently stop working. This tab translates <code>managementCertificateExpirationDate</code> into that operational signal — an assessment inferred from Graph data and observed tenant patterns, not a direct client inspection. Click any health badge or 🔍 Investigate for the full assessment.</div>
+        <div class="tiles">
+          <div class="tile" data-ch-tile="" style="cursor:pointer;" title="Show all devices">
+            <div class="tile-label">Windows devices</div>
+            <div class="tile-value" id="chTileTotal">0</div>
+            <div class="tile-sub">in scope</div>
+          </div>
+          <div class="tile tile-bad" data-ch-tile="broken" style="cursor:pointer;" title="Filter: management certificate expired — these devices likely cannot install Win32 apps or run scripts, even if they still check in">
+            <div class="tile-label">Management failure likely</div>
+            <div class="tile-value" id="chTileExpired">0</div>
+            <div class="tile-sub">likely unable to run Win32 apps &amp; scripts</div>
+          </div>
+          <div class="tile tile-warn" data-ch-tile="atrisk" style="cursor:pointer;" title="Filter: certificate expires ≤ 30 days — management will break if renewal fails">
+            <div class="tile-label">At risk</div>
+            <div class="tile-value" id="chTileExpiring">0</div>
+            <div class="tile-sub">cert expires ≤ 30 days</div>
+          </div>
+          <div class="tile tile-watch" data-ch-tile="stale" style="cursor:pointer;" title="Filter: stale sync ≥ 14 days — device not checking in, health unverifiable">
+            <div class="tile-label">Stale</div>
+            <div class="tile-value" id="chTileStale">0</div>
+            <div class="tile-sub">no check-in ≥ 14 days</div>
+          </div>
+          <div class="tile" title="Share of Windows devices with no broken / at-risk / stale flag — green ≥ 95%, yellow ≥ 85%, red below">
+            <div class="tile-label">Management health rate</div>
+            <div style="display:flex; align-items:center; gap:14px;">
+              <svg width="48" height="48" viewBox="0 0 50 50" style="flex-shrink:0;" aria-hidden="true">
+                <circle cx="25" cy="25" r="20" fill="none" stroke="var(--line)" stroke-width="5"/>
+                <circle id="chHealthRing" cx="25" cy="25" r="20" fill="none" stroke="#1f7a3a" stroke-width="5"
+                        stroke-dasharray="125.66" stroke-dashoffset="125.66"
+                        transform="rotate(-90 25 25)" stroke-linecap="round"
+                        style="transition: stroke-dashoffset .6s ease, stroke .2s ease;"/>
+              </svg>
+              <div>
+                <div class="tile-value" id="chHealthRate" style="font-size:30px;">—</div>
+                <div class="tile-sub" style="margin-top:4px;">no flag</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="table-card">
+          <div class="table-toolbar">
+            <h2>Devices</h2>
+            <div class="controls">
+              <input type="text" class="search" id="certhealthFilter" placeholder="Search device, user, model…">
+              <select class="filter-select" id="certhealthStateFilter">
+                <option value="" selected>All devices</option>
+                <option value="broken">Management failure likely</option>
+                <option value="atrisk">At risk (≤ 30 days)</option>
+                <option value="stale">Stale sync</option>
+                <option value="healthy">Healthy</option>
+              </select>
+              <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px; display:none;" id="btnCerthealthDelete" title="Delete the selected devices from Intune — removes the record; each device is retired on its next check-in">🗑 Delete selected</span>
+              <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px; display:none;" id="btnCerthealthWipe" title="Remote wipe the selected devices — factory reset; device remains enrolled in Intune">⚠ Wipe selected</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnCerthealthClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnCerthealthExport">⬇ Export CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnCerthealthRefresh">↻ Refresh</span>
+            </div>
+          </div>
+          <div id="certhealthLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading management health…</div>
+          <div id="certhealthError"></div>
+          <div id="certhealthContent" style="display:none;">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:26px;"><input type="checkbox" id="chSelectAll" title="Select / deselect all filtered devices" style="cursor:pointer;"></th>
+                  <th data-csort="deviceName">Device <span class="arrow">▼</span></th>
+                  <th data-csort="userPrincipalName">User <span class="arrow">▼</span></th>
+                  <th data-csort="osVersion">Windows <span class="arrow">▼</span></th>
+                  <th data-csort="daysRemaining">Days remaining <span class="arrow">▼</span></th>
+                  <th data-csort="managementCertificateExpirationDate">Cert expires <span class="arrow">▼</span></th>
+                  <th data-csort="daysSinceSync">Days since sync <span class="arrow">▼</span></th>
+                  <th data-csort="risk">Risk <span class="arrow">▼</span></th>
+                  <th data-csort="state">Health <span class="arrow">▼</span></th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="certhealthRowsBody"></tbody>
+            </table>
+            <div class="footer-count"><span id="certhealthCount">0</span> devices shown</div>
+          </div>
+        </div>
+      </div><!-- /intuneSubCerthealth -->
+
+      <div id="intuneSubVulnerabilities" style="display:none;">
+        <div class="tab-hint">Defender software inventory with CVE counts and exposed-device counts. Requires Defender for Endpoint P2 or M365 E5, and the Security Administrator role.</div>
+        <div class="tiles" style="grid-template-columns: repeat(6, 1fr);">
+          <div class="tile" id="vulnTileSoftware" style="cursor:pointer;" title="Open Defender inventory in new tab">
+            <div class="tile-label">Software</div>
+            <div class="tile-value" id="vulnKpiSoftware">0</div>
+            <div class="tile-sub">unique components</div>
+          </div>
+        </div>
+
+        <div class="table-card">
+          <div class="table-toolbar">
+            <h2>Software inventory</h2>
+            <div class="controls">
+              <input type="text" class="search" id="vulnFilter" placeholder="Search software, vendor, platform…">
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnVulnRefresh">↻ Refresh</span>
+            </div>
+          </div>
+          <div id="vulnLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading vulnerability data…</div>
+          <div id="vulnError"></div>
+          <div id="vulnContent" style="display:none;">
+            <table>
+              <thead>
+                <tr>
+                  <th data-vsort="softwareName">Software <span class="arrow">▼</span></th>
+                  <th data-vsort="osPlatform">OS Platform <span class="arrow">▼</span></th>
+                  <th data-vsort="vendor">Vendor <span class="arrow">▼</span></th>
+                  <th data-vsort="weaknesses">Weaknesses <span class="arrow">▼</span></th>
+                  <th data-vsort="exposedDevices">Exposed Devices <span class="arrow">▼</span></th>
+                </tr>
+              </thead>
+              <tbody id="vulnRowsBody"></tbody>
+            </table>
+            <div class="footer-count"><span id="vulnCount">0</span> software components shown</div>
+          </div>
+        </div>
+      </div><!-- /intuneSubVulnerabilities -->
+
+      <div id="intuneSubAssignments" style="display:none;">
+        <div class="tab-hint">Group-centric reverse lookup — pick an Entra group and see every policy, app, script, and update profile targeting it. The Hygiene panel above surfaces cruft: items with no assignments, assignments pointing at empty groups, and orphaned assignment filters.</div>
+
+        <!-- Assignment hygiene tiles -->
+        <div class="tiles" style="margin-bottom:16px;">
+          <div class="tile tile-watch" data-hygiene-tile="unassigned" style="cursor:pointer;">
+            <div class="tile-label">Unassigned items</div>
+            <div class="tile-value" id="kHygUnassigned">0</div>
+            <div class="tile-sub">policies / apps / scripts with no assignment</div>
+          </div>
+          <div class="tile tile-warn" data-hygiene-tile="emptyGroup" style="cursor:pointer;">
+            <div class="tile-label">Empty-group assignments</div>
+            <div class="tile-value" id="kHygEmptyGroup">0</div>
+            <div class="tile-sub">silent no-ops — group has zero members</div>
+          </div>
+          <div class="tile tile-watch" data-hygiene-tile="orphanedFilters" style="cursor:pointer;">
+            <div class="tile-label">Orphaned filters</div>
+            <div class="tile-value" id="kHygOrphanedFilters">0</div>
+            <div class="tile-sub">assignment filters not referenced</div>
+          </div>
+          <div class="tile" data-hygiene-tile="filtersInUse" style="cursor:pointer;">
+            <div class="tile-label">Filters in use</div>
+            <div class="tile-value" id="kHygFiltersInUse">0</div>
+            <div class="tile-sub">filters referenced by ≥ 1 assignment</div>
+          </div>
+        </div>
+        <div id="hygieneStatus" class="meta" style="font-size:11px; margin-bottom:12px;"></div>
+        <div id="hygieneDetail" style="display:none; margin-bottom:24px;"></div>
+
+        <div class="table-card" style="padding:20px; overflow:visible;">
+          <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+            <div style="position:relative; flex:1; min-width:280px;">
+              <input type="text" class="search" id="assignmentsSearch" placeholder="Search Entra groups by name…" style="width:100%;" autocomplete="off">
+              <div id="assignmentsSearchResults" style="display:none; position:absolute; left:0; right:0; top:100%; background:var(--card); border:1px solid var(--line); border-radius:8px; margin-top:4px; max-height:480px; overflow-y:auto; z-index:50; box-shadow:0 4px 16px rgba(0,0,0,.06);"></div>
+            </div>
+            <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAssignmentsRefresh">↻ Refresh</span>
+            <span id="btnAssignmentsCancel" style="display:none; cursor:pointer; color:var(--danger); font-weight:600; font-size:13px;" title="Stop indexing policies">✕ Cancel</span>
+          </div>
+          <div id="assignmentsLoadStatus" class="meta" style="margin-top:10px; font-size:12px;"></div>
+        </div>
+
+        <div id="assignmentsEmpty" class="meta" style="margin-top:16px; padding:24px; text-align:center;">Type a group name above to see what's assigned to it.</div>
+
+        <div id="assignmentsView" style="display:none; margin-top:16px;">
+          <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+            <h2 style="margin:0; font-size:20px;" id="assignmentsGroupName">—</h2>
+            <span class="meta" id="assignmentsGroupMeta" style="font-size:12px;"></span>
+          </div>
+
+          <div class="tiles" style="grid-template-columns: repeat(4, 1fr); margin-bottom:16px;">
+            <div class="tile">
+              <div class="tile-label">Apps</div>
+              <div class="tile-value" id="kAssignmentsApps">0</div>
+              <div class="tile-sub">mobile apps assigned</div>
+            </div>
+            <div class="tile">
+              <div class="tile-label">Configuration profiles</div>
+              <div class="tile-value" id="kAssignmentsConfigs">0</div>
+              <div class="tile-sub">deviceConfigurations (legacy)</div>
+            </div>
+            <div class="tile">
+              <div class="tile-label">Settings catalog</div>
+              <div class="tile-value" id="kAssignmentsSettingsCatalog">0</div>
+              <div class="tile-sub">configurationPolicies</div>
+            </div>
+            <div class="tile">
+              <div class="tile-label">Compliance policies</div>
+              <div class="tile-value" id="kAssignmentsCompliance">0</div>
+              <div class="tile-sub">platform compliance rules</div>
+            </div>
+            <div class="tile">
+              <div class="tile-label">PowerShell scripts</div>
+              <div class="tile-value" id="kAssignmentsPsScripts">0</div>
+              <div class="tile-sub">deviceManagementScripts</div>
+            </div>
+            <div class="tile">
+              <div class="tile-label">Remediations</div>
+              <div class="tile-value" id="kAssignmentsRemediations">0</div>
+              <div class="tile-sub">deviceHealthScripts</div>
+            </div>
+            <div class="tile">
+              <div class="tile-label">Windows Update profiles</div>
+              <div class="tile-value" id="kAssignmentsUpdates">0</div>
+              <div class="tile-sub">feature · quality · driver</div>
+            </div>
+          </div>
+
+          <div class="table-card" style="margin-bottom:16px;">
+            <div class="table-toolbar">
+              <h2>Apps <span class="meta" style="font-weight:400; font-size:13px;" id="aAppsCount">(0)</span></h2>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Intent</th>
+                  <th>Filter</th>
+                  <th>Exclusion</th>
+                  <th>Last modified</th>
+                </tr>
+              </thead>
+              <tbody id="aAppsRows"></tbody>
+            </table>
+          </div>
+
+          <div class="table-card" style="margin-bottom:16px;">
+            <div class="table-toolbar">
+              <h2>Configuration profiles <span class="meta" style="font-weight:400; font-size:13px;" id="aConfigsCount">(0)</span></h2>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Type</th>
+                  <th>Filter</th>
+                  <th>Exclusion</th>
+                  <th>Last modified</th>
+                </tr>
+              </thead>
+              <tbody id="aConfigsRows"></tbody>
+            </table>
+          </div>
+
+          <div class="table-card" style="margin-bottom:16px;">
+            <div class="table-toolbar">
+              <h2>Compliance policies <span class="meta" style="font-weight:400; font-size:13px;" id="aComplianceCount">(0)</span></h2>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Platform</th>
+                  <th>Filter</th>
+                  <th>Exclusion</th>
+                  <th>Last modified</th>
+                </tr>
+              </thead>
+              <tbody id="aComplianceRows"></tbody>
+            </table>
+          </div>
+
+          <div class="table-card" style="margin-bottom:16px;">
+            <div class="table-toolbar">
+              <h2>Remediations <span class="meta" style="font-weight:400; font-size:13px;" id="aRemediationsCount">(0)</span></h2>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Schedule</th>
+                  <th>Exclusion</th>
+                  <th>Last modified</th>
+                </tr>
+              </thead>
+              <tbody id="aRemediationsRows"></tbody>
+            </table>
+          </div>
+
+          <div class="table-card" style="margin-bottom:16px;">
+            <div class="table-toolbar">
+              <h2>Settings catalog <span class="meta" style="font-weight:400; font-size:13px;" id="aSettingsCatalogCount">(0)</span></h2>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Platform</th>
+                  <th>Filter</th>
+                  <th>Exclusion</th>
+                  <th>Last modified</th>
+                </tr>
+              </thead>
+              <tbody id="aSettingsCatalogRows"></tbody>
+            </table>
+          </div>
+
+          <div class="table-card" style="margin-bottom:16px;">
+            <div class="table-toolbar">
+              <h2>PowerShell scripts <span class="meta" style="font-weight:400; font-size:13px;" id="aPsScriptsCount">(0)</span></h2>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Run as</th>
+                  <th>Filter</th>
+                  <th>Exclusion</th>
+                  <th>Last modified</th>
+                </tr>
+              </thead>
+              <tbody id="aPsScriptsRows"></tbody>
+            </table>
+          </div>
+
+          <div class="table-card">
+            <div class="table-toolbar">
+              <h2>Windows Update profiles <span class="meta" style="font-weight:400; font-size:13px;" id="aUpdatesCount">(0)</span></h2>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Type</th>
+                  <th>Filter</th>
+                  <th>Exclusion</th>
+                  <th>Last modified</th>
+                </tr>
+              </thead>
+              <tbody id="aUpdatesRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div><!-- /intuneSubAssignments -->
+
+      <div id="intuneSubPosture" style="display:none;">
+        <div class="tab-hint">MSP customer-review of compliance + Conditional Access posture — the unsafe defaults and assignment patterns auditors flag. Compliance uses existing Intune scopes. Conditional Access needs optional <code>Policy.Read.All</code> (grant only when you want the CA section).</div>
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
+          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnPostureRefresh">↻ Refresh</span>
+          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnPostureExportComp">⬇ Export Compliance CSV</span>
+          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnPostureExportCa">⬇ Export CA CSV</span>
+          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnPostureClearKpi" title="Clear tile selection">✕ Clear KPI</span>
+        </div>
+        <div id="postureLoading" style="color:var(--muted); font-size:13px; padding:12px; display:none;">Loading posture…</div>
+        <div id="postureError"></div>
+
+        <section id="postureComplianceSection" style="margin-bottom:28px;">
+          <h2 style="margin:0 0 12px; font-size:18px;">Compliance</h2>
+          <div class="tiles" style="grid-template-columns:repeat(4,1fr);">
+            <div class="tile tile-bad" data-posture-tile="unsafeDefault" style="cursor:pointer;" title="Tenant marks devices with no compliance policy as compliant (secureByDefault = false)">
+              <div class="tile-label">Unsafe default</div>
+              <div class="tile-value" id="pTileUnsafe">—</div>
+              <div class="tile-sub">no policy = compliant</div>
+            </div>
+            <div class="tile tile-warn" data-posture-tile="noGrace" style="cursor:pointer;" title="Compliance policies with gracePeriodHours = 0">
+              <div class="tile-label">No grace period</div>
+              <div class="tile-value" id="pTileNoGrace">—</div>
+              <div class="tile-sub">gracePeriodHours = 0</div>
+            </div>
+            <div class="tile tile-watch" data-posture-tile="deviceTargeted" style="cursor:pointer;" title="Compliance policies assigned to device groups or all devices">
+              <div class="tile-label">Device-targeted</div>
+              <div class="tile-value" id="pTileDevice">—</div>
+              <div class="tile-sub">device groups / all devices</div>
+            </div>
+            <div class="tile tile-watch" data-posture-tile="noPlatformSplit" style="cursor:pointer;" title="Assigned compliance policies that are multi-platform or the tenant covers only one platform">
+              <div class="tile-label">No platform split</div>
+              <div class="tile-value" id="pTilePlatform">—</div>
+              <div class="tile-sub">cross-platform / single platform</div>
+            </div>
+          </div>
+          <div id="postureCompDetail" style="display:none; margin-top:16px;"></div>
+        </section>
+
+        <section id="postureCaSection">
+          <h2 style="margin:0 0 12px; font-size:18px;">Conditional Access</h2>
+          <div id="postureCaNeedScope" style="display:none;" class="notice-banner">
+            <strong>Grant <code>Policy.Read.All</code> to audit CA posture.</strong>
+            Compliance above still works without it. This scope is optional and requested only when you click Grant.
+            <div style="margin-top:10px;">
+              <button class="btn" id="btnPostureGrantCa">Grant Policy.Read.All</button>
+            </div>
+          </div>
+          <div id="postureCaBody" style="display:none;">
+            <div class="tiles" style="grid-template-columns:repeat(3,1fr);">
+              <div class="tile tile-warn" data-posture-tile="reportOnlyStale" style="cursor:pointer;" title="CA policies in report-only for more than 30 days">
+                <div class="tile-label">Report-only stale</div>
+                <div class="tile-value" id="pTileReportOnly">—</div>
+                <div class="tile-sub">&gt; 30 days report-only</div>
+              </div>
+              <div class="tile tile-bad" data-posture-tile="compliantGap" style="cursor:pointer;" title="Enabled CA grant policies that do not require compliant or hybrid-joined device">
+                <div class="tile-label">Compliant-device gap</div>
+                <div class="tile-value" id="pTileCompliantGap">—</div>
+                <div class="tile-sub">no compliantDevice / domainJoined</div>
+              </div>
+              <div class="tile tile-bad" data-posture-tile="legacyAuth" style="cursor:pointer;" title="No enabled CA policy blocking legacy authentication (exchangeActiveSync + other)">
+                <div class="tile-label">Legacy auth not blocked</div>
+                <div class="tile-value" id="pTileLegacy">—</div>
+                <div class="tile-sub">EAS + other client apps</div>
+              </div>
+            </div>
+            <div id="postureCaDetail" style="display:none; margin-top:16px;"></div>
+          </div>
+        </section>
+      </div><!-- /intuneSubPosture -->
+
+      <div id="intuneSubDrift" style="display:none;">
+        <div class="tab-hint">Fleet-wide software version drift via Defender. Catches cross-product-family drift (.NET 8 vs 9, Snagit major versions) Intune's reports can't see. Requires Defender for Endpoint P2 or M365 E5, and the Security Administrator role.</div>
+        <h2 style="margin: 0 0 16px 0; font-size: 22px;">Software Version Drift &amp; Compliance</h2>
+
+        <!-- KPI tiles -->
+        <div class="tiles" style="grid-template-columns: repeat(4, 1fr);">
+          <div class="tile tile-warn">
+            <div class="tile-label">Software with Drift &gt; 10%</div>
+            <div class="tile-value" id="kDriftHighCount">0</div>
+            <div class="tile-sub">≥ 1 device on a non-dominant version</div>
+          </div>
+          <div class="tile" title="Average share of devices on the dominant version across software components (100% − mean drift). Green ≥ 90%, yellow ≥ 75%, red below.">
+            <div class="tile-label">Fleet compliance rate</div>
+            <div style="display:flex; align-items:center; gap:14px;">
+              <svg width="48" height="48" viewBox="0 0 50 50" style="flex-shrink:0;" aria-hidden="true">
+                <circle cx="25" cy="25" r="20" fill="none" stroke="var(--line)" stroke-width="5"/>
+                <circle id="kDriftCompRing" cx="25" cy="25" r="20" fill="none" stroke="#1f7a3a" stroke-width="5"
+                        stroke-dasharray="125.66" stroke-dashoffset="125.66"
+                        transform="rotate(-90 25 25)" stroke-linecap="round"
+                        style="transition: stroke-dashoffset .6s ease, stroke .2s ease;"/>
+              </svg>
+              <div>
+                <div class="tile-value" id="kDriftAvg" style="font-size:30px;">—</div>
+                <div class="tile-sub" style="margin-top:4px;">on dominant version</div>
+              </div>
+            </div>
+          </div>
+          <div class="tile">
+            <div class="tile-label">Devices Affected</div>
+            <div class="tile-value" id="kDriftDevices">0</div>
+            <div class="tile-sub">Sum of drifted-device counts</div>
+          </div>
+          <div class="tile">
+            <div class="tile-label">Top Drifted Software</div>
+            <div class="tile-value" id="kDriftTopApp" style="font-size: 20px; line-height: 1.2;">—</div>
+            <div class="tile-sub" id="kDriftTopAppSub">—</div>
+          </div>
+        </div>
+
+        <!-- Table -->
+        <div class="table-card">
+          <div class="table-toolbar">
+            <h2>Software version drift</h2>
+            <div class="controls">
+              <input type="text" class="search" id="driftFilter" placeholder="Search software, vendor…">
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnDriftRefresh">↻ Refresh</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnDriftExport">⬇ Export CSV</span>
+            </div>
+          </div>
+          <div id="driftLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading drift data…</div>
+          <div id="driftError"></div>
+          <div id="driftContent" style="display:none;">
+            <table>
+              <thead>
+                <tr>
+                  <th data-sort-drift="softwareName">Software <span class="arrow">▼</span></th>
+                  <th data-sort-drift="vendor">Vendor <span class="arrow">▼</span></th>
+                  <th data-sort-drift="dominantVersion">Dominant Version <span class="arrow">▼</span></th>
+                  <th data-sort-drift="driftPct">Drift % <span class="arrow">▼</span></th>
+                  <th data-sort-drift="driftedDevices">Drifted Devices <span class="arrow">▼</span></th>
+                  <th data-sort-drift="versionCount">Versions Detected <span class="arrow">▼</span></th>
+                </tr>
+              </thead>
+              <tbody id="driftRows"></tbody>
+            </table>
+            <div class="footer-count"><span id="driftCount">0</span> software components shown</div>
+          </div>
+        </div>
+      </div><!-- /intuneSubDrift -->
+
+      <div id="intuneSubSoftdeleted" style="display:none;">
+        <div class="tab-hint">
+          Entra ID device recycle bin (preview). Soft-deleted devices remain restorable for
+          <strong>30 days</strong> with BitLocker recovery keys, LAPS passwords, and key material preserved.
+          Only Cloud Device Administrator, Intune Administrator, or Global Administrator can restore.
+          <strong>Hybrid-joined devices are hard-deleted and do not appear here.</strong>
+        </div>
+        <div id="sdLoading" class="loading">Loading soft-deleted devices…</div>
+        <div id="sdError"></div>
+        <div id="sdNotice"></div>
+        <div id="sdContent" style="display:none;">
+          <div class="table-card">
+            <div class="table-toolbar">
+              <h2>Soft-deleted devices</h2>
+              <div class="controls">
+                <input type="text" class="search" id="sdFilter" placeholder="Search device, OS…">
+                <span id="btnSdRefresh" style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;">↻ Refresh</span>
+              </div>
+            </div>
+            <table>
+              <thead><tr>
+                <th>Device name</th>
+                <th>OS</th>
+                <th>Trust type</th>
+                <th>Object ID</th>
+                <th>Deleted at</th>
+                <th>Days remaining</th>
+                <th>Enabled at delete</th>
+                <th>Action</th>
+              </tr></thead>
+              <tbody id="sdRows"></tbody>
+            </table>
+            <div class="footer-count"><span id="sdCount">0</span> soft-deleted devices</div>
+          </div>
+        </div>
+      </div><!-- /intuneSubSoftdeleted -->
+
+      <div id="intuneSubStaleusers" style="display:none;">
+        <div class="tab-hint">
+          Entra <strong>member</strong> accounts that are inactive or never signed in — the license-reclaim / identity-hygiene view for customer reviews. Last activity = the most recent of <code>lastSignInDateTime</code>, <code>lastNonInteractiveSignInDateTime</code>, and <code>lastSuccessfulSignInDateTime</code>, so non-interactive activity doesn't false-flag a user. Read-only by default; Revoke / Disable request scopes <strong>just-in-time</strong> on first click — list-only viewers are never prompted for write scopes. <code>signInActivity</code> requires Entra ID <strong>P1/P2</strong>.
+        </div>
+        <div class="tiles" style="grid-template-columns: repeat(4, 1fr);">
+          <div class="tile" data-su-tile="" style="cursor:pointer;" title="Show all members in scope">
+            <div class="tile-label">Members in scope</div>
+            <div class="tile-value" id="suTileTotal">0</div>
+            <div class="tile-sub">enabled member accounts</div>
+          </div>
+          <div class="tile tile-warn" data-su-tile="idle" style="cursor:pointer;" title="Filter: idle ≥ threshold (changes with the dropdown)">
+            <div class="tile-label">Idle <span id="suTileIdleLabel">90+</span> days</div>
+            <div class="tile-value" id="suTileIdle">0</div>
+            <div class="tile-sub">no recent sign-in</div>
+          </div>
+          <div class="tile tile-watch" data-su-tile="never" style="cursor:pointer;" title="Filter: no recorded sign-in activity">
+            <div class="tile-label">Never signed in</div>
+            <div class="tile-value" id="suTileNever">0</div>
+            <div class="tile-sub">no recorded activity</div>
+          </div>
+          <div class="tile tile-bad" data-su-tile="licensedStale" style="cursor:pointer;" title="Filter: licensed AND stale (idle ≥ threshold or never signed in) — the reclaim headline">
+            <div class="tile-label">Licensed &amp; stale</div>
+            <div class="tile-value" id="suTileLicensedStale">0</div>
+            <div class="tile-sub">≥ 1 license + stale</div>
+          </div>
+        </div>
+        <div class="table-card">
+          <div class="table-toolbar">
+            <h2>Members</h2>
+            <div class="controls">
+              <input type="text" class="search" id="staleusersFilter" placeholder="Search name, UPN…">
+              <div class="filter-group">
+                <span class="filter-group-label">Idle threshold</span>
+                <select class="filter-select" id="staleusersThreshold">
+                  <option value="30">30 days</option>
+                  <option value="60">60 days</option>
+                  <option value="90" selected>90 days</option>
+                  <option value="180">180 days</option>
+                </select>
+              </div>
+              <label class="toggle" title="Include accounts with no recorded sign-in activity"><input type="checkbox" id="staleusersIncludeNever" checked> Include never-signed-in</label>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnStaleusersClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnStaleusersExport">⬇ Export CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnStaleusersRefresh">↻ Refresh</span>
+            </div>
+          </div>
+          <div id="staleusersLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading members…</div>
+          <div id="staleusersError"></div>
+          <div id="staleusersNotice"></div>
+          <div id="staleusersContent" style="display:none;">
+            <table>
+              <thead>
+                <tr>
+                  <th data-su-sort="displayName">Display name <span class="arrow">▼</span></th>
+                  <th data-su-sort="userPrincipalName">UPN <span class="arrow">▼</span></th>
+                  <th data-su-sort="lastActivityMs">Last activity <span class="arrow">▼</span></th>
+                  <th data-su-sort="daysIdle">Days idle <span class="arrow">▼</span></th>
+                  <th data-su-sort="signinBadge">Sign-in <span class="arrow">▼</span></th>
+                  <th data-su-sort="licenseCount">Licensed <span class="arrow">▼</span></th>
+                  <th data-su-sort="status">Status <span class="arrow">▼</span></th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="staleusersRows"></tbody>
+            </table>
+            <div class="footer-count"><span id="staleusersCount">0</span> members shown</div>
+          </div>
+        </div>
+      </div><!-- /intuneSubStaleusers -->
+
+      <div id="intuneSubAiagents" style="display:none;">
+        <div class="tab-hint">
+          Locally installed <strong>AI agents</strong> discovered across the fleet — the shadow-AI visibility view, fed by Defender for Endpoint <strong>agent discovery (preview)</strong>: CLI agents (Claude Code, Codex, Gemini CLI, GitHub Copilot CLI), desktop apps (ChatGPT, Claude, Ollama), agentic IDEs (Cursor, Windsurf), and VS Code extensions — see <a href="https://learn.microsoft.com/en-us/defender-endpoint/local-agent-discovery-overview" target="_blank" rel="noopener noreferrer">the supported-agent list</a>; agents not on it are invisible to discovery. Detection logic adapted from <a href="https://github.com/SlimKQL/Detections.AI/blob/main/KQL/agent-365--local-ai-agent-installation-detection.kql" target="_blank" rel="noopener noreferrer">SlimKQL / Detections.AI</a>. Because the preview's hunting schema is in flux, the tab cascades through four sources — <code>AgentsInfo</code> → <code>AIAgentsInfo</code> (retired July 1, 2026) → the exposure graph (<code>ExposureGraphEdges</code>) → the <strong>fleet scan</strong> (the <code>AI Agent Scan</code> Proactive Remediation, deployable from this tab's empty state — agentless client-side hunting until Microsoft enables discovery by default) — and a banner states which one answered. Defender sources need P2 / M365 E5, the <code>ThreatHunting.Read.All</code> scope (already requested at sign-in), and a Defender security role on the signed-in user; the fleet scan only needs the existing Intune scopes.
+        </div>
+        <div class="tiles" style="grid-template-columns: repeat(5, 1fr);">
+          <div class="tile" data-ai-tile="" style="cursor:pointer;" title="Show all detected local AI agent installations">
+            <div class="tile-label">Agent installs</div>
+            <div class="tile-value" id="aiTileTotal">0</div>
+            <div class="tile-sub">local AI agents detected</div>
+          </div>
+          <div class="tile" id="aiTileNamesTile" style="cursor:pointer;" title="Distinct agent products detected — click to group the table by agent name">
+            <div class="tile-label">Unique agents</div>
+            <div class="tile-value" id="aiTileNames">0</div>
+            <div class="tile-sub">distinct agent names</div>
+          </div>
+          <div class="tile" title="Devices with at least one local AI agent">
+            <div class="tile-label">Devices with agents</div>
+            <div class="tile-value" id="aiTileDevices">0</div>
+            <div class="tile-sub">≥ 1 agent installed</div>
+          </div>
+          <div class="tile tile-warn" data-ai-tile="new" style="cursor:pointer;" title="Filter: agents first detected in the last 7 days — the SlimKQL detection uses a 24h window for alerting">
+            <div class="tile-label">New (7 days)</div>
+            <div class="tile-value" id="aiTileNew">0</div>
+            <div class="tile-sub">recently installed</div>
+          </div>
+          <div class="tile" title="Share of Defender-onboarded devices (seen in the last 7 days) with at least one local AI agent">
+            <div class="tile-label">Fleet footprint</div>
+            <div style="display:flex; align-items:center; gap:14px;">
+              <svg width="48" height="48" viewBox="0 0 50 50" style="flex-shrink:0;" aria-hidden="true">
+                <circle cx="25" cy="25" r="20" fill="none" stroke="var(--line)" stroke-width="5"/>
+                <circle id="aiFootprintRing" cx="25" cy="25" r="20" fill="none" stroke="#d4a017" stroke-width="5"
+                        stroke-dasharray="125.66" stroke-dashoffset="125.66"
+                        transform="rotate(-90 25 25)" stroke-linecap="round"
+                        style="transition: stroke-dashoffset .6s ease, stroke .2s ease;"/>
+              </svg>
+              <div>
+                <div class="tile-value" id="aiTileFootprint" style="font-size:30px;">—</div>
+                <div class="tile-sub" style="margin-top:4px;">of onboarded devices</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="table-card">
+          <div class="table-toolbar">
+            <h2>Detected agents</h2>
+            <div class="controls">
+              <input type="text" class="search" id="aiagentsFilter" placeholder="Search agent, vendor, device, user…">
+              <div class="filter-group">
+                <span class="filter-group-label">View</span>
+                <select class="filter-select" id="aiagentsViewMode">
+                  <option value="installs" selected>Installations</option>
+                  <option value="byagent">By agent name</option>
+                </select>
+              </div>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnAiagentsClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAiagentsExport">⬇ Export CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAiagentsRefresh">↻ Refresh</span>
+            </div>
+          </div>
+          <div id="aiagentsLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading AI agents…</div>
+          <div id="aiagentsError"></div>
+          <div id="aiagentsNotice"></div>
+          <div id="aiagentsContent" style="display:none;">
+            <table id="aiagentsTable"></table>
+            <div class="footer-count"><span id="aiagentsCount">0</span> <span id="aiagentsCountLabel">installations</span> shown</div>
+          </div>
+        </div>
+      </div><!-- /intuneSubAiagents -->
+
+      <div id="intuneSubDiskspace" style="display:none;">
+        <div class="tab-hint">
+          Windows devices below your selected free-disk-space threshold. The Win32 app <code>Disk space required (MB)</code> requirement rule silently marks a device as <strong>Requirements not met</strong> or <strong>Not Applicable</strong> when free space is below the rule — no obvious error in the Intune console, just a missing install. When an install does attempt and fails on disk, the IME logs commonly show <code>0x80070070</code> (not enough space on disk) or <code>0x87D30067</code> (extraction failed, often disk-related). Background context: Microsoft incident <strong>IT1168328</strong> (the Intune Store / WinGet log bloat bug) silently filled <code>%windir%\Temp\WinGet\defaultState</code> on many tenants through 2025, and Windows 11 24H2 upgrades have pushed disk pressure up across the fleet.
+        </div>
+        <div class="tiles">
+          <div class="tile" data-ds-tile="" style="cursor:pointer;" title="Show all Windows devices">
+            <div class="tile-label">Windows devices</div>
+            <div class="tile-value" id="dsTileTotal">0</div>
+            <div class="tile-sub">in scope</div>
+          </div>
+          <div class="tile tile-bad" data-ds-tile="1024" style="cursor:pointer;" title="Filter: devices with less than 1 GB free — emergency / Windows breaking, most Win32 requirement rules will fail">
+            <div class="tile-label">&lt; 1 GB free</div>
+            <div class="tile-value" id="dsTileCrit">0</div>
+            <div class="tile-sub">emergency</div>
+          </div>
+          <div class="tile tile-warn" data-ds-tile="5120" style="cursor:pointer;" title="Filter: devices with less than 5 GB free — common helpdesk pain, most installers struggle">
+            <div class="tile-label">&lt; 5 GB free</div>
+            <div class="tile-value" id="dsTileWarn">0</div>
+            <div class="tile-sub">at risk</div>
+          </div>
+          <div class="tile tile-watch" data-ds-tile="20480" style="cursor:pointer;" title="Filter: devices with less than 20 GB free — proactive monitoring band (Syst &amp; Deploy warning default)">
+            <div class="tile-label">&lt; 20 GB free</div>
+            <div class="tile-value" id="dsTileWatch">0</div>
+            <div class="tile-sub">watch</div>
+          </div>
+          <div class="tile" title="Lowest free-space device in the fleet (worst offender)">
+            <div class="tile-label">Lowest free</div>
+            <div class="tile-value" id="dsTileLowest" style="font-size:30px;">—</div>
+            <div class="tile-sub" id="dsTileLowestSub">on —</div>
+          </div>
+          <div class="tile" title="Share of Windows devices with at least 20 GB free — green ≥ 95%, yellow ≥ 80%, red below">
+            <div class="tile-label">Disk health rate</div>
+            <div style="display:flex; align-items:center; gap:14px;">
+              <svg width="48" height="48" viewBox="0 0 50 50" style="flex-shrink:0;" aria-hidden="true">
+                <circle cx="25" cy="25" r="20" fill="none" stroke="var(--line)" stroke-width="5"/>
+                <circle id="dsHealthRing" cx="25" cy="25" r="20" fill="none" stroke="#1f7a3a" stroke-width="5"
+                        stroke-dasharray="125.66" stroke-dashoffset="125.66"
+                        transform="rotate(-90 25 25)" stroke-linecap="round"
+                        style="transition: stroke-dashoffset .6s ease, stroke .2s ease;"/>
+              </svg>
+              <div>
+                <div class="tile-value" id="dsHealthRate" style="font-size:30px;">—</div>
+                <div class="tile-sub" style="margin-top:4px;">≥ 20 GB free</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="table-card">
+          <div class="table-toolbar">
+            <h2>Devices</h2>
+            <div class="controls">
+              <input type="text" class="search" id="diskspaceFilter" placeholder="Search device, user, model…">
+              <select class="filter-select" id="diskspaceBandFilter" title="Free-disk-space threshold (MB)">
+                <option value="" selected>All devices</option>
+                <option value="250">&lt; 250 MB (small Win32 rule fails)</option>
+                <option value="500">&lt; 500 MB (medium Win32 rule fails)</option>
+                <option value="1024">&lt; 1 GB (emergency)</option>
+                <option value="2048">&lt; 2 GB (most installers fail)</option>
+                <option value="5120">&lt; 5 GB (helpdesk pain)</option>
+                <option value="10240">&lt; 10 GB (alert default)</option>
+                <option value="20480">&lt; 20 GB (warning band)</option>
+              </select>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnDiskspaceClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnDiskspaceExport">⬇ Export CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnDiskspaceRefresh">↻ Refresh</span>
+            </div>
+          </div>
+          <div id="diskspaceLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading disk-space inventory…</div>
+          <div id="diskspaceError"></div>
+          <div id="diskspaceContent" style="display:none;">
+            <table>
+              <thead>
+                <tr>
+                  <th data-dsort="deviceName">Device <span class="arrow">▼</span></th>
+                  <th data-dsort="userPrincipalName">User <span class="arrow">▼</span></th>
+                  <th data-dsort="osVersion">Windows <span class="arrow">▼</span></th>
+                  <th data-dsort="model">Model <span class="arrow">▼</span></th>
+                  <th data-dsort="freeMB">Free <span class="arrow">▼</span></th>
+                  <th data-dsort="totalMB">Total <span class="arrow">▼</span></th>
+                  <th data-dsort="freePct">Free % <span class="arrow">▼</span></th>
+                  <th data-dsort="lastSync">Last check-in <span class="arrow">▼</span></th>
+                </tr>
+              </thead>
+              <tbody id="diskspaceRowsBody"></tbody>
+            </table>
+            <div class="footer-count"><span id="diskspaceCount">0</span> devices shown</div>
+          </div>
+        </div>
+      </div><!-- /intuneSubDiskspace -->
+
+      <div id="intuneSubRemediation" style="display:none;">
+        <div class="tab-hint">All proactive remediation scripts (<code>deviceHealthScripts</code>) with their schedules. Click a script to open its Intune admin-center blade.</div>
+
+        <div id="remediationImeCard" style="padding:14px 16px; background:var(--row-hover); border:1px solid var(--line); border-radius:8px; margin-bottom:16px;">
+          <div style="font-weight:600; font-size:14px; margin-bottom:4px;">⚡ IME Required App Check-in — run on a device <span class="meta" style="font-weight:400; font-size:12px;">(Rudy Ooms / Call4Cloud)</span></div>
+          <div style="font-size:12px; color:var(--muted); line-height:1.6; margin-bottom:10px;">Pick a Windows device and force an on-demand required-app check-in — triggers the IME <code>IStatusService.CheckInAsync</code> path, cutting the ~60-minute wait for required Win32 apps after Autopilot or a new assignment. The remediation runs as the <strong>logged-on user</strong>, so the device needs a signed-in user and to be online; otherwise Intune queues it. The same <strong>⚡ Check-in</strong> action also lives on every device row in the Hardware and Failed Install tabs, and inside the Management health tab's Health Assessment panel.</div>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; position:relative;">
+            <input type="text" class="search" id="imePickerSearch" placeholder="Search device by name…" style="flex:1; min-width:240px;" autocomplete="off">
+            <button class="btn" id="btnImeRun" disabled>⚡ Run check-in</button>
+            <div id="imePickerResults" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:20; max-height:220px; overflow-y:auto; border:1px solid var(--line); border-radius:6px; margin-top:4px; background:var(--card); box-shadow:0 6px 18px rgba(0,0,0,.12);"></div>
+          </div>
+          <div id="imePickerSelected" style="display:none; margin-top:8px; padding:6px 10px; background:var(--accent-soft); border-radius:6px; font-size:12px;"></div>
+          <div id="remediationImeStatus" style="font-size:12px; margin-top:8px;"></div>
+          <div id="remediationImeActivity" style="font-size:12px; margin-top:6px; color:var(--muted);"></div>
+          <div style="font-size:11px; margin-top:8px; color:var(--muted);">Verify a run on the device (signed in as that user) — log folder: <code style="user-select:all; -webkit-user-select:all; cursor:text;" title="Click to select, then copy">%LOCALAPPDATA%\IMERequiredAppCheckinRemediation\Logs</code></div>
+        </div>
+
+        <div class="table-card">
+          <div class="table-toolbar">
+            <h2>Remediations</h2>
+            <div class="controls">
+              <input type="text" class="search" id="remediationFilter" placeholder="Search script or publisher…">
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnRemediationRefresh">↻ Refresh</span>
+            </div>
+          </div>
+          <div id="remediationLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading remediation scripts…</div>
+          <div id="remediationError"></div>
+          <div id="remediationContent" style="display:none;">
+            <table>
+              <thead>
+                <tr>
+                  <th data-rsort="displayName">Script name <span class="arrow">▼</span></th>
+                  <th data-rsort="publisher">Publisher <span class="arrow">▼</span></th>
+                  <th data-rsort="schedule">Schedule <span class="arrow">▼</span></th>
+                  <th data-rsort="assignmentCount">Assigned groups <span class="arrow">▼</span></th>
+                  <th data-rsort="lastModified">Last modified <span class="arrow">▼</span></th>
+                </tr>
+              </thead>
+              <tbody id="remediationRowsBody"></tbody>
+            </table>
+            <div class="footer-count"><span id="remediationCount">0</span> scripts shown</div>
+          </div>
+        </div>
+      </div><!-- /intuneSubRemediation -->
+
+      <div id="intuneSubMetering" style="display:none;">
+        <div class="tab-hint">Real per-user application usage from Intune-managed Windows devices, agentless via Proactive Remediations. Surfaces "installed but never launched" and "idle 90+ days" candidates for licence reclamation. See <code>scripts/README.md</code> for the collection script. <strong>Privacy:</strong> usernames are reduced to a single initial; no window titles, document names, URLs, or file paths are collected.</div>
+
+        <div id="meteringEmpty" style="display:none; padding:20px 22px; background:var(--row-hover); border:1px solid var(--line); border-radius:8px; margin-bottom:16px;">
+          <div style="font-weight:600; font-size:14px; margin-bottom:8px;">Software metering not configured for this customer</div>
+          <div style="font-size:13px; color:var(--muted); line-height:1.6; margin-bottom:14px;">The metering collection script is a Proactive Remediation that needs to be created in this tenant before this tab has data to show. Deploy it directly from here, or upload <code>scripts/software-metering-detect.ps1</code> manually and paste its script ID into <strong>Settings → Customers</strong>.</div>
+          <button class="btn" id="btnMeteringDeploy" style="margin-right:8px;">⚡ Auto-deploy script…</button>
+          <span style="font-size:12px; color:var(--muted);">requires re-consent for one new write scope on first use</span>
+        </div>
+
+        <div id="meteringLoading" style="display:none; color:var(--muted); font-size:13px; padding:12px;">Loading metering data…</div>
+        <div id="meteringError"></div>
+
+        <div id="meteringMain" style="display:none;">
+          <div class="tiles" style="margin-bottom:14px;">
+            <div class="tile" id="kMeteringDevicesTile" title="Devices that have run the metering script at least once">
+              <div class="tile-label">Devices reporting</div>
+              <div class="tile-value" id="kMeteringDevices">—</div>
+              <div class="tile-sub" id="kMeteringDevicesSub">—</div>
+            </div>
+            <div class="tile" id="kMeteringAppsTile" title="Unique apps tracked across the fleet">
+              <div class="tile-label">Apps tracked</div>
+              <div class="tile-value" id="kMeteringApps">—</div>
+              <div class="tile-sub">across fleet</div>
+            </div>
+            <div class="tile clickable" id="kMeteringIdleTile" title="Click to filter: apps with ≥1 install idle 90+ days or never launched">
+              <div class="tile-label">Likely unused</div>
+              <div class="tile-value" id="kMeteringIdle">—</div>
+              <div class="tile-sub">install × device pairs</div>
+            </div>
+            <div class="tile clickable" id="kMeteringReclaimTile" title="Click to filter: apps installed on ≥10 devices with ≥50% idle 90d+ or never launched">
+              <div class="tile-label">Reclaim candidates</div>
+              <div class="tile-value" id="kMeteringReclaim">—</div>
+              <div class="tile-sub">apps</div>
+            </div>
+            <div class="tile" title="Share of installs that are not idle 90+ days or never-launched — i.e. licences actually being used. Green ≥ 75%, yellow ≥ 50%, red below.">
+              <div class="tile-label">Utilization rate</div>
+              <div style="display:flex; align-items:center; gap:14px;">
+                <svg width="48" height="48" viewBox="0 0 50 50" style="flex-shrink:0;" aria-hidden="true">
+                  <circle cx="25" cy="25" r="20" fill="none" stroke="var(--line)" stroke-width="5"/>
+                  <circle id="kMeteringUtilRing" cx="25" cy="25" r="20" fill="none" stroke="#1f7a3a" stroke-width="5"
+                          stroke-dasharray="125.66" stroke-dashoffset="125.66"
+                          transform="rotate(-90 25 25)" stroke-linecap="round"
+                          style="transition: stroke-dashoffset .6s ease, stroke .2s ease;"/>
+                </svg>
+                <div>
+                  <div class="tile-value" id="kMeteringUtilRate" style="font-size:30px;">—</div>
+                  <div class="tile-sub" style="margin-top:4px;">of installs in use</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="table-card">
+            <div class="table-toolbar">
+              <h2 id="meteringTableTitle">Apps</h2>
+              <div class="controls">
+                <input type="text" class="search" id="meteringFilter" placeholder="Search app or publisher…">
+                <span style="cursor:pointer; color:var(--muted); font-weight:600; font-size:13px; display:none;" id="btnMeteringClearKpi" title="Clear KPI filter">✕ Clear KPI</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnMeteringExport">⬇ Export CSV</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnMeteringRefresh">↻ Refresh</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnMeteringRedeploy" title="Re-run the Auto-deploy wizard (e.g. after deleting the script in Intune, or to change the assignment / schedule)">⚡ Redeploy script…</span>
+              </div>
+            </div>
+
+            <div id="meteringAppsView">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-sort-metering="app">App <span class="arrow">▼</span></th>
+                    <th data-sort-metering="publisher">Publisher <span class="arrow">▼</span></th>
+                    <th data-sort-metering="installs">Installs <span class="arrow">▼</span></th>
+                    <th data-sort-metering="active30d">Active 30d <span class="arrow">▼</span></th>
+                    <th data-sort-metering="idle90d">Idle 90d+ <span class="arrow">▼</span></th>
+                    <th data-sort-metering="neverLaunched">Never launched <span class="arrow">▼</span></th>
+                    <th data-sort-metering="lastFleetUse">Last fleet use <span class="arrow">▼</span></th>
+                  </tr>
+                </thead>
+                <tbody id="meteringAppRows"></tbody>
+              </table>
+              <div class="footer-count"><span id="meteringAppCount">0</span> apps shown<span id="meteringFootnote" style="color:var(--muted);"></span></div>
+            </div>
+
+            <div id="meteringDrillView" style="display:none;">
+              <div style="padding:12px 14px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px;">
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnMeteringDrillBack">← Back to apps</span>
+                <span style="font-weight:600;" id="meteringDrillTitle"></span>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th data-sort-metering-drill="deviceName">Device <span class="arrow">▼</span></th>
+                    <th data-sort-metering-drill="version">Version <span class="arrow">▼</span></th>
+                    <th data-sort-metering-drill="daysSinceUse">Days since use <span class="arrow">▼</span></th>
+                    <th data-sort-metering-drill="lastReported">Last reported <span class="arrow">▼</span></th>
+                  </tr>
+                </thead>
+                <tbody id="meteringDrillRows"></tbody>
+              </table>
+              <div class="footer-count"><span id="meteringDrillCount">0</span> device rows</div>
+            </div>
+          </div>
+        </div><!-- /meteringMain -->
+      </div><!-- /intuneSubMetering -->
+
+      <div id="intuneSubAppversions" style="display:none;">
+        <div class="tab-hint">Version sprawl in your <strong>Intune app catalog</strong> (<code>deviceAppManagement/mobileApps</code>) — the app <em>packages</em> you've created/uploaded, <strong>assigned or not</strong>. Surfaces apps you hold many versions of (the classic "11 Notepad++ packages" mess, often from PatchMyPC publishing) so you can retire the superseded ones. <strong>Surplus</strong> = packages older than the newest version of that app; <strong>Unassigned</strong> packages target no group at all (safest to delete). Click 🗑 on any package to delete it from Intune (reuses the typed-confirm Delete flow, multi-admin-approval aware).</div>
+
+        <div id="appversionsLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading Intune app catalog…</div>
+        <div id="appversionsError"></div>
+
+        <div id="appversionsContent" style="display:none;">
+          <div class="tiles" style="margin-bottom:14px;">
+            <div class="tile clickable" id="kAppverMultiTile" title="Click to filter: apps held in more than one version/package">
+              <div class="tile-label">Multi-version apps</div>
+              <div class="tile-value" id="kAppverMulti">—</div>
+              <div class="tile-sub">of <span id="kAppverTotal">—</span> apps</div>
+            </div>
+            <div class="tile" id="kAppverWorstTile" title="The app with the most packages in the catalog — click to open it">
+              <div class="tile-label">Worst offender</div>
+              <div class="tile-value" id="kAppverWorst" style="font-size:20px; line-height:1.25;">—</div>
+              <div class="tile-sub" id="kAppverWorstSub">—</div>
+            </div>
+            <div class="tile clickable" id="kAppverSurplusTile" title="Click to filter: apps with packages older than their newest version">
+              <div class="tile-label">Surplus packages</div>
+              <div class="tile-value" id="kAppverSurplus">—</div>
+              <div class="tile-sub">older versions to retire</div>
+            </div>
+            <div class="tile clickable" id="kAppverUnassignedTile" title="Click to filter: apps with packages assigned to no group">
+              <div class="tile-label">Unassigned packages</div>
+              <div class="tile-value" id="kAppverUnassigned">—</div>
+              <div class="tile-sub">orphans, safest to delete</div>
+            </div>
+            <div class="tile" title="Single-version rate — share of catalog apps held in exactly one package. Green ≥ 85%, yellow ≥ 60%, red below.">
+              <div class="tile-label">Single-version rate</div>
+              <div style="display:flex; align-items:center; gap:14px;">
+                <svg width="48" height="48" viewBox="0 0 50 50" style="flex-shrink:0;" aria-hidden="true">
+                  <circle cx="25" cy="25" r="20" fill="none" stroke="var(--line)" stroke-width="5"/>
+                  <circle id="kAppverRing" cx="25" cy="25" r="20" fill="none" stroke="#1f7a3a" stroke-width="5"
+                          stroke-dasharray="125.66" stroke-dashoffset="125.66"
+                          transform="rotate(-90 25 25)" stroke-linecap="round"
+                          style="transition: stroke-dashoffset .6s ease, stroke .2s ease;"/>
+                </svg>
+                <div>
+                  <div class="tile-value" id="kAppverRate" style="font-size:30px;">—</div>
+                  <div class="tile-sub" style="margin-top:4px;">apps with no duplicates</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="table-card">
+            <div class="table-toolbar">
+              <h2 id="appverTableTitle">Apps</h2>
+              <div class="controls">
+                <input type="text" class="search" id="appverFilter" placeholder="Search app or publisher…">
+                <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); cursor:pointer; white-space:nowrap;" title="Hide apps held in only one package — focus on the version sprawl">
+                  <input type="checkbox" id="appverDupesOnly" checked> Only apps with duplicates
+                </label>
+                <span style="cursor:pointer; color:var(--muted); font-weight:600; font-size:13px; display:none;" id="btnAppverClearKpi" title="Clear KPI filter">✕ Clear KPI</span>
+                <a href="https://github.com/call4cloud-code/Intunewin-Downloader-Public/raw/main/0.6.127.zip" target="_blank" rel="noopener noreferrer" style="color:var(--accent); font-weight:600; font-size:13px; text-decoration:none;" title="Zip of the portable app. Unzip it and run IntuneWinDownloader.WinUI.exe. The dashboard does not launch it.">Download IntuneWin Downloader</a>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAppverExport">⬇ Export CSV</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAppverRefresh">↻ Refresh</span>
+              </div>
+            </div>
+
+            <div id="appverAppsView">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-sort-appver="app">App <span class="arrow">▼</span></th>
+                    <th data-sort-appver="publisher">Publisher <span class="arrow">▼</span></th>
+                    <th data-sort-appver="versionCount">Packages <span class="arrow">▼</span></th>
+                    <th data-sort-appver="newest">Newest version <span class="arrow">▼</span></th>
+                    <th data-sort-appver="assignedCount">Assigned <span class="arrow">▼</span></th>
+                    <th data-sort-appver="unassignedCount">Unassigned <span class="arrow">▼</span></th>
+                    <th data-sort-appver="platform">Platform <span class="arrow">▼</span></th>
+                  </tr>
+                </thead>
+                <tbody id="appverAppRows"></tbody>
+              </table>
+              <div class="footer-count"><span id="appverAppCount">0</span> apps shown<span id="appverFootnote" style="color:var(--muted);"></span></div>
+            </div>
+
+            <div id="appverDrillView" style="display:none;">
+              <div style="padding:12px 14px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px;">
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAppverDrillBack">← Back to apps</span>
+                <span style="font-weight:600;" id="appverDrillTitle"></span>
+                <span style="cursor:pointer; color:#8a2020; font-weight:600; font-size:13px; display:none; margin-left:auto;" id="btnAppverDeleteSel" title="Permanently delete the selected packages from Intune">🗑 Delete Selected</span>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width:28px;"><input type="checkbox" id="apvSelectAll" title="Select all packages"></th>
+                    <th data-sort-appver-drill="version">Version <span class="arrow">▼</span></th>
+                    <th data-sort-appver-drill="assigned">Assignment <span class="arrow">▼</span></th>
+                    <th data-sort-appver-drill="created">Created <span class="arrow">▼</span></th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="appverDrillRows"></tbody>
+              </table>
+              <div class="footer-count"><span id="appverDrillCount">0</span> packages</div>
+            </div>
+          </div>
+        </div><!-- /appversionsContent -->
+      </div><!-- /intuneSubAppversions -->
+    </div>
+  </div><!-- /viewIntune -->
+
+  <div id="viewAnalyze" style="display:none;">
+    <div class="tab-hint">Drop one or more Intune log files (IME / AgentExecutor / MSI verbose) for AI-powered triage (Claude or Grok, per Settings). Auto-trim cuts input tokens ~80%.</div>
+    <div class="table-card" style="display:flex; flex-direction:column; align-items:stretch; gap:16px; padding:24px;">
+      <div>
+        <div style="font-weight:600; font-size:14px; margin-bottom:6px;">Log file analysis</div>
+        <div style="font-size:12px; color:var(--muted); line-height:1.55;">
+          Drop one or more Intune log files below. Default location on Windows:
+          <code style="background:var(--accent-soft); padding:2px 6px; border-radius:3px; font-family:ui-monospace,monospace; font-size:11px;">C:\ProgramData\Microsoft\IntuneManagementExtension\Logs</code>
+          <button id="copyLogPath" class="btn btn-ghost" style="font-size:11px; padding:2px 8px; margin-left:6px;">Copy path</button>
+        </div>
+      </div>
+
+      <div id="logDropZone" style="border:2px dashed var(--line); border-radius:12px; padding:32px 20px; text-align:center; cursor:pointer; transition:border-color 0.15s, background 0.15s;">
+        <div style="font-size:28px; margin-bottom:8px;">📄</div>
+        <div style="font-size:13px; font-weight:600; margin-bottom:4px;">Drop log files here or click to select</div>
+        <div style="font-size:11px; color:var(--muted);">IntuneManagementExtension.log, AgentExecutor.log, MSI verbose logs (*.log)</div>
+        <input type="file" id="logFiles" accept=".log,.txt" multiple style="display:none;">
+      </div>
+
+      <div id="logFileList" style="display:none;"></div>
+
+      <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
+        <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;">
+          <input type="checkbox" id="logAutoTrim" checked>
+          <span>Auto-trim to error-adjacent lines <span style="color:var(--muted); font-size:11px;">(recommended — cuts tokens ~80%)</span></span>
+        </label>
+        <button class="btn" id="btnAnalyzeLogs" disabled>Analyze</button>
+        <span id="logStatus" style="font-size:12px; color:var(--muted);"></span>
+      </div>
+
+      <div id="logAnalysisResult" style="display:none; border:1px solid var(--line); border-radius:12px; padding:20px 24px; background:var(--card);"></div>
+    </div>
+  </div>
+
+  <div id="viewSettings" style="display:none;">
+    <div class="tab-hint">Configure customers (for MSPs managing multiple tenants) and the API key for optional AI features (Claude or Grok). Everything stored in your browser's localStorage only.</div>
+    <div class="table-card" style="display:flex; flex-direction:column; align-items:stretch; gap:20px; padding:24px;">
+
+      <div id="settings-preferences">
+        <div style="font-weight:600; font-size:14px; margin-bottom:6px;">Customers</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:12px;">For MSPs managing multiple tenants. Add each customer with a short code (2–3 letters) — the code is what shows in the dashboard's tenant dropdown so customer names stay off your screenshots. Only the code, the login email, an optional approver list, and optional remediation script IDs (Software Metering and IME Required App Check-in) are stored; no tokens. The dropdown appears once you've added two or more. When you submit a delete on a Multi-Admin-Approval tenant, the dashboard emails the approver list from your own mailbox (uses the <code>Mail.Send</code> scope, consent requested on first use) — so the signed-in account needs an Exchange Online mailbox. Use <strong>✉ Send test</strong> next to an approver list to verify the mail path without deleting anything.</div>
+
+        <div id="customersList" style="border:1px solid var(--line); border-radius:8px; margin-bottom:12px; background:var(--row-hover);"></div>
+
+        <div style="display:grid; grid-template-columns: 90px 1fr auto; gap:8px; align-items:center;">
+          <input type="text" id="customerCodeInput" placeholder="Code" maxlength="4" class="search" style="text-transform:uppercase;">
+          <input type="email" id="customerEmailInput" placeholder="user@customer.com" class="search">
+          <button class="btn" id="btnAddCustomer">Add</button>
+        </div>
+        <input type="text" id="customerApproversInput" placeholder="Approvers — comma-separated emails (optional, for MAA delete notifications)" class="search" style="width:100%; margin-top:8px;">
+        <input type="text" id="customerMeteringIdInput" placeholder="Software metering script ID — GUID from Intune (optional)" class="search" style="width:100%; margin-top:8px; font-family:ui-monospace, monospace;">
+        <input type="text" id="customerImeIdInput" placeholder="IME Required App Check-in script ID — GUID from Intune (optional)" class="search" style="width:100%; margin-top:8px; font-family:ui-monospace, monospace;">
+        <div id="customerAddStatus" style="font-size:12px; color:var(--muted); margin-top:6px;"></div>
+        <div id="mailLogBox"></div>
+      </div>
+
+      <div id="settings-integrations">
+        <div style="font-weight:600; font-size:14px; margin-bottom:6px;">Analyze provider</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">Which API Analyze and error-code clicks use. Switching provider or leaving a key field saves immediately — you do not have to hit Save first. An <code>xai-</code> key in either field uses Grok. Keys stay in this browser only — never sent to Microsoft Graph.</div>
+        <select id="llmProvider" class="search" style="width:100%; cursor:pointer;">
+          <option value="claude" selected>Claude — Anthropic or OpenRouter</option>
+          <option value="xai">Grok — xAI</option>
+        </select>
+      </div>
+
+      <div>
+        <div style="font-weight:600; font-size:14px; margin-bottom:6px;">Claude API key</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">Anthropic (<code>sk-ant-…</code> → api.anthropic.com) or OpenRouter (<code>sk-or-…</code> → openrouter.ai, same Claude models). If you paste an <code>xai-…</code> key here, Analyze uses Grok instead. Stored in localStorage — never sent anywhere else.</div>
+        <input type="password" class="search" id="claudeApiKey" placeholder="sk-ant-api03-… or sk-or-v1-…" style="width:100%; font-family:ui-monospace, monospace;">
+      </div>
+
+      <div>
+        <div style="font-weight:600; font-size:14px; margin-bottom:6px;">xAI API key</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">Grok key from <a href="https://console.x.ai" target="_blank" rel="noopener noreferrer">console.x.ai</a> — not Twitter/X developer.x.com. Typical prefix <code>xai-…</code>. This field stays visible; pasting here (or an <code>xai-</code> key in the Claude field) routes Analyze to <code>https://api.x.ai</code>. Stored in localStorage — never sent anywhere else.</div>
+        <input type="password" class="search" id="xaiApiKey" placeholder="xai-…" style="width:100%; font-family:ui-monospace, monospace;">
+      </div>
+
+      <div id="claudeModelBlock">
+        <div style="font-weight:600; font-size:14px; margin-bottom:6px;">Model</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">Pick a model based on cost vs. depth of analysis. Each error-code analysis uses roughly 500 input + 400 output tokens.</div>
+        <select id="claudeModel" class="search" style="width:100%; cursor:pointer;">
+          <option value="claude-haiku-4-5-20251001" selected>Haiku 4.5 — $1/$5 per MTok — ~$0.0025/click — recommended default</option>
+          <option value="claude-sonnet-5">Sonnet 5 — $3/$15 per MTok ($2/$10 intro thru Aug 2026) — ~$0.0075/click — deeper reasoning</option>
+          <option value="claude-opus-4-8">Opus 4.8 — $5/$25 per MTok — ~$0.0125/click — reserve for stuck cases</option>
+          <option value="claude-fable-5">Fable 5 — $10/$50 per MTok — ~$0.025/click — most capable, slower</option>
+        </select>
+      </div>
+
+      <div id="xaiModelBlock" style="display:none;">
+        <div style="font-weight:600; font-size:14px; margin-bottom:6px;">Model</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">Pick a Grok model. Each error-code analysis uses roughly 500 input + 400 output tokens.</div>
+        <select id="xaiModel" class="search" style="width:100%; cursor:pointer;">
+          <option value="grok-4.3" selected>Grok 4.3 — $1.25/$2.50 per MTok — ~$0.0016/click — recommended default</option>
+          <option value="grok-4.6">Grok 4.6 — $2/$6 per MTok — ~$0.0034/click — escalate for deeper / stuck logs</option>
+        </select>
+      </div>
+
+      <div>
+        <div style="font-weight:600; font-size:14px; margin-bottom:6px;">Large tenants</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">Options that keep Hardware / Assignments usable when the fleet is thousands of devices. Stored in this browser only.</div>
+        <label style="display:flex; align-items:flex-start; gap:10px; font-size:13px; cursor:pointer; line-height:1.45;">
+          <input type="checkbox" id="scaleSkipHwRam" style="margin-top:3px; flex-shrink:0;">
+          <span><strong>Slim Hardware</strong> — skip per-device RAM backfill. List/storage/OS tiles still load; RAM columns stay empty until you turn this off and Refresh Hardware. Prefer this on multi-thousand-device tenants.</span>
+        </label>
+      </div>
+
+      <div style="border:1px solid var(--line); border-radius:10px; padding:14px 16px; background:var(--row-hover);">
+        <div style="font-weight:600; font-size:13px; margin-bottom:8px;">What is cached vs re-fetched</div>
+        <div style="font-size:12px; color:var(--ink-2); line-height:1.55;">
+          <ul style="margin:0; padding-left:18px;">
+            <li><strong>In-memory (this session)</strong> — each Intune sub-tab keeps its last Graph result until you click <strong>↻ Refresh</strong> on that tab or switch customer/tenant (full reset). Switching browser tabs does not clear it.</li>
+            <li><strong>sessionStorage</strong> — MSAL access tokens only (no refresh tokens across browser restarts).</li>
+            <li><strong>localStorage</strong> — customers list, Claude/OpenRouter and xAI keys + model, Analyze provider, large-tenant toggles, error-analysis cache. Survives reloads; never uploaded as a blob to our servers (there are none).</li>
+            <li><strong>Always live on demand</strong> — MAA approve/reject/complete, app/device deletes, script deploy, mail send, and any action after Cancel mid-walk (partial data stays until Refresh).</li>
+            <li><strong>Long walks</strong> — Hardware device paging + RAM backfill, and Assignments multi-endpoint index, show <strong>✕ Cancel</strong> while running. Cancel keeps whatever already arrived.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div id="claudeModelHelp" style="border:1px solid var(--line); border-radius:10px; padding:14px 16px; background:var(--row-hover);">
+        <div style="font-weight:600; font-size:13px; margin-bottom:8px;">Choosing a model</div>
+        <div style="font-size:12px; color:var(--ink-2); line-height:1.55;">
+          <strong>Haiku 4.5</strong> is the default — cheapest, fastest, and has its own rate-limit bucket so it won't conflict with other Anthropic API usage. Sufficient for error-code lookup and most MSI logs where the failure is a single obvious stack trace.
+          <ul style="margin:8px 0 0; padding-left:18px;">
+            <li><strong>Haiku 4.5</strong> — default. Most error codes and routine logs.</li>
+            <li><strong>Sonnet 5</strong> — escalate when Haiku misses something. Better at correlating timestamps across long IME logs and isolating root cause from noise. Intro pricing ($2/$10) through Aug 2026.</li>
+            <li><strong>Opus 4.8</strong> — reserve for cases where Sonnet gives up. The Opus 4.7+ tokenizer uses ~30% more tokens for the same text, so the effective cost gap is wider than headline pricing.</li>
+            <li><strong>Fable 5</strong> — Anthropic's most capable model, at 2× Opus pricing and higher latency. Last resort for logs nothing else can untangle.</li>
+          </ul>
+          <div style="margin-top:8px;">Biggest cost lever: <strong>auto-trim logs before sending</strong> — grep for error/return-value lines + surrounding context cuts input tokens 80%+ with no quality loss.</div>
+        </div>
+      </div>
+
+      <div id="xaiModelHelp" style="display:none; border:1px solid var(--line); border-radius:10px; padding:14px 16px; background:var(--row-hover);">
+        <div style="font-weight:600; font-size:13px; margin-bottom:8px;">Choosing a model</div>
+        <div style="font-size:12px; color:var(--ink-2); line-height:1.55;">
+          <strong>Grok 4.3</strong> is the default — cheaper and enough for error-code lookup and most MSI logs, same reason Claude defaults to Haiku.
+          <ul style="margin:8px 0 0; padding-left:18px;">
+            <li><strong>Grok 4.3</strong> — default. $1.25 / $2.50 per MTok, 1M context. Routine error codes and trimmed logs.</li>
+            <li><strong>Grok 4.6</strong> — escalate for deeper / stuck logs ($2 / $6 per MTok under 200k prompt tokens).</li>
+          </ul>
+          <div style="margin-top:8px;">Keys come from <a href="https://console.x.ai" target="_blank" rel="noopener noreferrer">console.x.ai</a>. Biggest cost lever is still <strong>auto-trim logs before sending</strong>.</div>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:12px; align-items:center;">
+        <button class="btn" id="btnSaveSettings">Save</button>
+        <span id="settingsStatus" style="font-size:12px; color:var(--muted);"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h3 id="mTitle"></h3>
+        <div class="panel-sub" id="mPub" style="margin-top: 4px;"></div>
+      </div>
+      <button class="close-btn" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body" id="mBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="chAssessModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h3 id="chAssessTitle">Health assessment</h3>
+        <div class="panel-sub" id="chAssessSub" style="margin-top: 4px;"></div>
+      </div>
+      <button class="close-btn" onclick="closeChAssessModal()">×</button>
+    </div>
+    <div class="modal-body" id="chAssessBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="detModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h3 id="detTitle">Detection rule</h3>
+        <div class="panel-sub" id="detSubtitle" style="margin-top: 4px;"></div>
+      </div>
+      <button class="close-btn" onclick="closeDetectionRulesModal()">×</button>
+    </div>
+    <div class="modal-body" id="detBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="delModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h3>Delete app from Intune</h3>
+        <div class="panel-sub" id="delSubtitle" style="margin-top: 4px;"></div>
+      </div>
+      <button class="close-btn" onclick="closeDeleteModal()">×</button>
+    </div>
+    <div class="modal-body" id="delBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="staleActionModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h3 id="suActionTitle">Confirm action</h3>
+        <div class="panel-sub" id="suActionSubtitle" style="margin-top: 4px;"></div>
+      </div>
+      <button class="close-btn" onclick="closeStaleActionModal()">×</button>
+    </div>
+    <div class="modal-body" id="suActionBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="approvalActionModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h3 id="apaTitle">Approval action</h3>
+        <div class="panel-sub" id="apaSubtitle" style="margin-top: 4px;"></div>
+      </div>
+      <button class="close-btn" onclick="closeApprovalActionModal()">×</button>
+    </div>
+    <div class="modal-body" id="apaBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="deviceLinkModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h3>Device Link CSV</h3>
+        <div class="panel-sub" style="margin-top: 4px;">Autopilot device preparation · name templates need a pre-associated device</div>
+      </div>
+      <button class="close-btn" onclick="closeDeviceLinkModal()">×</button>
+    </div>
+    <div class="modal-body" id="deviceLinkBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="auditModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h3>Device action history</h3>
+        <div class="panel-sub" id="auditSubtitle" style="margin-top: 4px;"></div>
+      </div>
+      <button class="close-btn" onclick="closeAuditModal()">×</button>
+    </div>
+    <div class="modal-body" id="auditBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="meteringDeployModal">
+  <div class="modal" style="max-width:680px;">
+    <div class="modal-header">
+      <div>
+        <h3 id="mdTitle">Auto-deploy Software Metering script</h3>
+        <div class="panel-sub" id="mdSubtitle" style="margin-top: 4px;"></div>
+      </div>
+      <button class="close-btn" id="btnMeteringDeployClose">×</button>
+    </div>
+    <div class="modal-body">
+      <div id="mdError" style="display:none; margin-bottom:14px;"></div>
+
+      <div id="mdConflict" style="display:none; padding:12px 14px; background:#fff4e0; border:1px solid #f0c674; border-radius:6px; margin-bottom:14px;">
+        <div style="font-weight:600; font-size:13px; margin-bottom:6px;">A script with this name already exists in this tenant.</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:10px;" id="mdConflictDetail"></div>
+        <button class="btn" id="mdBtnReuse" style="margin-right:8px;">Reuse existing</button>
+        <button class="btn" id="mdBtnReplace" style="margin-right:8px; background:#c0392b; color:#fff; border-color:#c0392b;">Delete existing and create new</button>
+        <button class="btn btn-ghost" id="mdBtnRename">Rename and create new</button>
+      </div>
+
+      <div style="display:grid; grid-template-columns: 110px 1fr; gap:8px 12px; align-items:center; margin-bottom:14px;">
+        <label style="font-size:12px; color:var(--muted);">Name *</label>
+        <input type="text" class="search" id="mdName" value="THE Intune Dashboard - Software Metering">
+
+        <label style="font-size:12px; color:var(--muted);">Publisher *</label>
+        <input type="text" class="search" id="mdPublisher" value="THE Intune Dashboard">
+
+        <label style="font-size:12px; color:var(--muted); align-self:start; padding-top:6px;">Description</label>
+        <textarea id="mdDescription" class="search" rows="6" style="font-family:inherit; resize:vertical;"></textarea>
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <div style="font-weight:600; font-size:13px; margin-bottom:8px;">Assignment</div>
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+            <input type="radio" name="mdTarget" value="group" checked> Specific group (recommended for first pilot)
+          </label>
+          <div id="mdGroupRow" style="padding-left:24px;">
+            <input type="text" class="search" id="mdGroupSearch" placeholder="Type to search groups…" style="width:100%;">
+            <div id="mdGroupResults" style="display:none; max-height:160px; overflow-y:auto; border:1px solid var(--line); border-radius:6px; margin-top:6px; background:var(--card);"></div>
+            <div id="mdGroupSelected" style="display:none; margin-top:6px; padding:6px 10px; background:var(--accent-soft); border-radius:6px; font-size:12px;"></div>
+          </div>
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+            <input type="radio" name="mdTarget" value="all"> All Devices (fleet-wide — only after a successful pilot)
+          </label>
+        </div>
+      </div>
+
+      <div style="display:grid; grid-template-columns: 110px 1fr; gap:8px 12px; align-items:center; margin-bottom:14px;">
+        <label style="font-size:12px; color:var(--muted);">Schedule</label>
+        <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
+          Daily at <input type="text" id="mdScheduleTime" value="03:00" maxlength="5" class="search" style="width:70px; text-align:center;"> UTC
+        </div>
+      </div>
+
+      <details style="margin-bottom:14px;">
+        <summary style="cursor:pointer; font-size:12px; color:var(--muted);">Script content preview (<span id="mdScriptSize">loading…</span>)</summary>
+        <pre id="mdScriptPreview" style="max-height:220px; overflow:auto; background:#1e1e1e; color:#eee; padding:10px; border-radius:6px; font-size:11px; margin-top:8px; white-space:pre;"></pre>
+      </details>
+
+      <div style="padding:10px 12px; background:#f5f5f0; border-left:3px solid var(--accent); font-size:12px; margin-bottom:14px;">
+        This creates a Proactive Remediation in the active tenant and starts running on the targeted devices on the next sync. The script always exits 0 (detection-only — no remediation runs). On first use this requires re-consent for the <code>DeviceManagementScripts.ReadWrite.All</code> scope.
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button class="btn btn-ghost" id="mdBtnCancel">Cancel</button>
+        <button class="btn" id="mdBtnDeploy">Deploy</button>
+      </div>
+    </div>
+  </div>
+</div>
+<button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle dark mode" hidden></button>
+<div class="session-pill" id="sessionPill" title="Click to reset">
+  <span class="dot"></span>
+  <span><strong id="sessionCost">$0.00</strong> · <span id="sessionCalls">0</span> calls</span>
+</div>
+
+

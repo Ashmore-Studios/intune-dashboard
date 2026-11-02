@@ -42,11 +42,21 @@ Highlights that fill portal gaps: failed-install session-noise verdicts, MAA que
 2. Drop log files → **Analyze**.
 
 ### Local development
-Do **not** open `index.html` as `file://` (MSAL redirect fails). From the repo root:
+Do **not** open `index.html` as `file://` (MSAL redirect fails). The console is a Vite build that serves the existing reports behind the Ashmore UI shell. From the repo root, with GitHub Packages access for `@ashmore-studios/ui` already configured in your user npm settings:
 
 ```bash
-python -m http.server 8080
-# open http://localhost:8080/
+npm install
+npm run dev
+# open http://localhost:5173/
+```
+
+The Entra redirect URI remains `window.location.origin + window.location.pathname`, so a local dev server only works if that exact origin is registered on the existing application. Production keeps the deployed HTTPS hostname.
+
+### Docker
+The image is a multi-stage build: Node compiles the static assets, Nginx serves them. Private package install uses a BuildKit secret mounted at `/root/.npmrc`, or a build argument `GH_PACKAGES_TOKEN` when the host cannot pass a secret. Do not commit that token.
+
+```bash
+docker compose build
 ```
 
 ---
@@ -122,13 +132,14 @@ Proactive Remediation collectors (software metering, AI agent scan, IME required
 
 | Piece | Location |
 |-------|----------|
-| UI + tab logic | `index.html` |
-| Styles | `css/dashboard.css` |
-| MSAL config + read scopes | `js/msal-config.js` |
-| Graph helpers | `js/graph.js` |
+| Application shell | `src/` (Vite, React, TypeScript, Ashmore UI) |
+| Report workspace | `public/legacy-body.html` and `public/js/engine.js` |
+| Styles | Ashmore UI tokens, plus `public/css/dashboard.css` for existing reports |
+| MSAL config + read scopes | `public/js/msal-config.js` |
+| Graph helpers | `public/js/graph.js` |
 | Collectors | `scripts/*.ps1` |
 
-No build step. MSAL + PapaParse from CDN. Static hosting (GitHub Pages).
+`npm run build` writes static files to `dist/`. Nginx serves that directory. MSAL and PapaParse still load from their CDNs. The Entra redirect URI stays the site origin plus pathname, and navigation uses the URL hash so a refresh does not change it.
 
 ### Scale notes (large tenants)
 
@@ -158,7 +169,6 @@ Expect multi-minute Hardware RAM backfill on fleets of several thousand devices;
 | [docs/FEATURES.md](docs/FEATURES.md) | Full tab-by-tab reference, Graph calls, registry export snippet |
 | [SECURITY.md](SECURITY.md) | Data flow, storage, reporting vulnerabilities |
 | [scripts/README.md](scripts/README.md) | Deploy metering / AI scan / IME check-in |
-| [tasks/todo.md](tasks/todo.md) | Active backlog |
 | [CLAUDE.md](CLAUDE.md) | Agent coding rules for this repo |
 
 ---

@@ -1,8 +1,7 @@
 .git
 .github
-Dockerfile
-docker-compose.yml
-README.md
+node_modules
+dist
 CLAUDE.md
-tasks/
-scripts/
+email/
+.claude/

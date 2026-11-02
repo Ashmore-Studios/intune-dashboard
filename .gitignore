@@ -1,6 +1,9 @@
 # Local Claude Code settings
 .claude/
 
+node_modules/
+dist/
+
 # Exported real emails and local render previews (contain tenant/customer data)
 email/
 

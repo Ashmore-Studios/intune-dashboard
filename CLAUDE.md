@@ -41,7 +41,7 @@ Never start editing on a stale checkout — diverged branches create merge confl
 
 ## Email template
 
-All MAA emails go through `buildMaaEmailHtml()` in `index.html`. It produces a full nested-table HTML document (not a div layout) copied from a real PIM notification so it survives Outlook's Word renderer. Never rewrite it as divs, and never add a second template. Body/table text is 16px Segoe UI; heading 28px Segoe UI Semibold; button is a border-padded anchor inside a black table cell.
+All MAA emails go through `buildMaaEmailHtml()` in `public/js/engine.js`. It produces a full nested-table HTML document (not a div layout) copied from a real PIM notification so it survives Outlook's Word renderer. Never rewrite it as divs, and never add a second template. Body/table text is 16px Segoe UI; heading 28px Segoe UI Semibold; button is a border-padded anchor inside a black table cell.
 
 ## UI design
 

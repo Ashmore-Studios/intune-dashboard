@@ -5,8 +5,8 @@
   --ink-2: #4a4a4f;
   --muted: #9a9a9f;
   --line: #ece8e1;
-  --accent: #e8743b;
-  --accent-soft: #f5e3d6;
+  --accent: #1d4573;
+  --accent-soft: #e6eef6;
   --dark: #0f0f10;
   --danger: #b42318;
   --danger-soft: #fdecec;
@@ -37,15 +37,15 @@
   --ink-2:#c6c1b6;
   --muted:#8f897d;
   --line:#2d2a23;
-  --accent:#f0894f;
-  --accent-soft:#3a2615;
+  --accent:#3d91f3;
+  --accent-soft:#16304d;
   --dark:#0d0d0e;
   --danger:#e3685d;
   --danger-soft:#2e1413;
   --row-hover:#26221b;
   --btn-solid-bg:var(--accent);
-  --btn-solid-bg-hover:#f59a66;
-  --btn-solid-fg:#1b1206;
+  --btn-solid-bg-hover:#67adf6;
+  --btn-solid-fg:#0d1b2e;
   --good-border:#2f9e54; --good-bg:#11271a; --good-ink:#86d8a1;
   --watch-border:#cda52a; --watch-bg:#2a2410; --watch-ink:#ebc95e;
   --warn-border:#d98a33; --warn-bg:#2c2010; --warn-ink:#f0b277;
@@ -68,7 +68,7 @@ body {
   font-family: var(--font-body);
   /* Faint warm glow behind the masthead lifts the flat cream into atmosphere. */
   background:
-    radial-gradient(80% 55% at 50% -8%, rgba(232,116,59,.06), transparent 60%),
+    radial-gradient(80% 55% at 50% -8%, rgba(61,145,243,.08), transparent 60%),
     var(--bg);
   background-attachment: fixed;
   color: var(--ink);
@@ -115,7 +115,7 @@ html.locked .theme-toggle { display: none; }
   gap: 12px;
 }
 .eyebrow::after { content: ''; width: 80px; height: 1px; background: var(--accent); opacity: .4; }
-h1 { font-family: var(--font-display); font-size: 44px; font-weight: 800; margin: 12px 0 8px; letter-spacing: -0.02em; }
+.container > h1 { font-family: var(--font-display); font-size: 44px; font-weight: 800; margin: 12px 0 8px; letter-spacing: -0.02em; }
 .subtitle { color: var(--ink-2); margin: 0 0 32px; }
 
 .tiles { display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px; margin-bottom: 24px; }
@@ -206,7 +206,7 @@ h1 { font-family: var(--font-display); font-size: 44px; font-weight: 800; margin
   /* Layered radial glows (warm top-right, cool bottom-left) turn the flat
      dark panel into a lit surface; grain added via ::before below. */
   background:
-    radial-gradient(130% 120% at 88% 6%, rgba(232,116,59,.22), transparent 52%),
+    radial-gradient(130% 120% at 88% 6%, rgba(61,145,243,.22), transparent 52%),
     radial-gradient(95% 90% at 6% 104%, rgba(120,142,205,.12), transparent 58%),
     var(--dark);
   color: white;
@@ -349,7 +349,7 @@ tbody tr:last-child td { border-bottom: none; }
 #auditModal .modal { max-width: 1400px; }
 #deviceLinkModal .modal { max-width: 920px; }
 /* Six equal Autopilot tiles on one row. The first two open Intune. */
-#intuneSubAutopilot .ap-tiles { grid-template-columns: repeat(6, 1fr); }
+#intuneSubAutopilot .ap-tiles { grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); }
 #intuneSubAutopilot a.ap-portal-tile { text-decoration: none; color: inherit; cursor: pointer; }
 #intuneSubAutopilot a.ap-portal-tile .tile-value { color: var(--accent); }
 .modal-header { padding: 24px 28px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: start; gap: 16px; }
@@ -489,11 +489,11 @@ tbody tr:last-child td { border-bottom: none; }
   text-overflow: ellipsis;
   transition: color .15s, background .15s, box-shadow .15s;
 }
-.subtab:hover { color: var(--ink-2); background: rgba(232,116,59,.07); }
+.subtab:hover { color: var(--ink-2); background: rgba(61,145,243,.08); }
 .subtab.active {
   color: var(--accent);
   background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px rgba(232,116,59,.28);
+  box-shadow: inset 0 0 0 1px rgba(61,145,243,.28);
 }
 
 /* Hardware tab filter chips */
@@ -529,7 +529,7 @@ tbody tr:last-child td { border-bottom: none; }
 /* Recycle candidate row — subtle warning tint */
 tbody tr.warn-row { background: #fcf3eb; }
 tbody tr.warn-row:hover { background: #f9ead9; }
-.warn-cell { color: var(--accent); font-weight: 600; }
+.warn-cell { color: var(--warn-ink); font-weight: 600; }
 
 /* Donut + summary layout for Hardware */
 .hw-overview {
@@ -619,7 +619,7 @@ tbody tr.warn-row:hover { background: #f9ead9; }
   padding: 44px 46px;
   color: #fff;
   background:
-    radial-gradient(130% 120% at 88% 4%, rgba(232,116,59,.30), transparent 52%),
+    radial-gradient(130% 120% at 88% 4%, rgba(61,145,243,.30), transparent 52%),
     radial-gradient(95% 90% at 4% 104%, rgba(120,142,205,.16), transparent 58%),
     var(--dark);
   display: flex; flex-direction: column; justify-content: center;
@@ -653,8 +653,8 @@ tbody tr.warn-row:hover { background: #f9ead9; }
 .signin-badge {
   width: 54px; height: 54px; border-radius: 16px;
   display: flex; align-items: center; justify-content: center;
-  color: #fff; background: linear-gradient(155deg, var(--accent), #c2541f);
-  box-shadow: 0 10px 24px rgba(232,116,59,.32);
+  color: var(--btn-solid-fg); background: linear-gradient(155deg, var(--accent), #1d4573);
+  box-shadow: 0 10px 24px rgba(29,69,115,.32);
   margin-bottom: 20px;
 }
 .signin-title { font-size: 24px; font-weight: 800; letter-spacing: -0.01em; margin: 0 0 6px; }
@@ -720,7 +720,7 @@ html.locked .signin { min-height: calc(100vh - 110px); align-items: center; }
   user-select: none;
 }
 .pager .page-btn:hover:not(.disabled):not(.active) { color: var(--ink); border-color: var(--ink-2); }
-.pager .page-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+.pager .page-btn.active { background: var(--accent); color: var(--btn-solid-fg); border-color: var(--accent); font-weight: 600; }
 .pager .page-btn.disabled { opacity: 0.4; cursor: default; }
 .pager .page-ellipsis { padding: 0 4px; color: var(--ink-2); }
 .pager .page-info { margin-left: auto; color: var(--ink-2); }

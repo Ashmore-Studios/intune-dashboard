@@ -1,0 +1,84 @@
+@import "tailwindcss";
+@import "@ashmore-studios/ui/styles.css";
+@source "../node_modules/@ashmore-studios/ui/dist";
+@import "../public/css/dashboard.css";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+html {
+  overflow: hidden;
+}
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: "Outfit", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+body::before {
+  display: none !important;
+}
+
+#legacy-root {
+  color: var(--foreground);
+}
+#legacy-root .container {
+  max-width: none;
+  padding: 8px 8px 48px;
+}
+#legacy-root .container > .eyebrow,
+#legacy-root .container > h1,
+#legacy-root .container > .subtitle,
+#legacy-root .container > .tabs,
+#legacy-root .subtabs,
+#legacy-root .auth-bar,
+#legacy-root #themeToggle,
+#legacy-root #intuneSubOverview {
+  display: none !important;
+}
+
+.ops-nav[data-collapsed="true"] .ops-brand,
+.ops-nav[data-collapsed="true"] h2,
+.ops-nav[data-collapsed="true"] li span.truncate {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+[data-theme="dark"] #legacy-root .error-banner {
+  background: var(--bad-bg);
+  border-color: var(--bad-border);
+  color: var(--bad-ink);
+}
+[data-theme="dark"] #legacy-root .notice-banner {
+  background: var(--good-bg);
+  border-color: var(--good-border);
+  color: var(--good-ink);
+}
+
+/* Brays Pipelines: navy for light surfaces, logo blue for dark. Both clear WCAG AA. */
+:root {
+  --primary: #1d4573;
+  --primary-foreground: #ffffff;
+  --ring: #1d4573;
+  --sidebar-primary: #1d4573;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-ring: #1d4573;
+}
+.dark {
+  --primary: #3d91f3;
+  --primary-foreground: #0d1b2e;
+  --ring: #3d91f3;
+  --sidebar-primary: #3d91f3;
+  --sidebar-primary-foreground: #0d1b2e;
+  --sidebar-ring: #3d91f3;
+}

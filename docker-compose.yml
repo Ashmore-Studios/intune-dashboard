@@ -3,6 +3,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      secrets:
+        - npmrc
     restart: unless-stopped
     expose:
       - "80"
+
+secrets:
+  npmrc:
+    file: ${HOME}/.npmrc

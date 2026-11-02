@@ -1,0 +1,11997 @@
+let rawRows = [];      // raw CSV rows
+let displayRows = [];  // after filter/dedupe transforms, used by table
+let sortKey = 'DisplayName';
+let sortDir = 'asc';
+
+const $ = id => document.getElementById(id);
+const esc = s => s == null ? '' : String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const escCsv = v => {
+  let s = v == null ? '' : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; // neutralize Excel formula injection
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+const fmtDate = d => (!d || d.length !== 8) ? '—' : `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`;
+const isX86 = r => (r.RegistryPath || '').includes('WOW6432Node');
+const isHKCU = r => (r.RegistryPath || '').toUpperCase().startsWith('HKEY_CURRENT_USER') || (r.RegistryPath || '').toUpperCase().startsWith('HKCU');
+const locationOf = r => isHKCU(r) ? 'HKCU' : 'HKLM';
+
+// Add a × clear button inside every input.search. Idempotent — safe to
+// call after dynamic re-renders that inject new inputs into the DOM.
+function attachSearchClearButtons(root) {
+  (root || document).querySelectorAll('input.search:not([data-clear-attached])').forEach(input => {
+    input.dataset.clearAttached = '1';
+    let wrap = input.parentNode;
+    if (!wrap.classList || !wrap.classList.contains('search-wrap')) {
+      const newWrap = document.createElement('span');
+      newWrap.className = 'search-wrap';
+      // If the input had inline width:100%, hand it to the wrap so layout matches
+      const inlineWidth = input.style.width;
+      if (inlineWidth) {
+        newWrap.style.width = inlineWidth;
+        input.style.width = '100%';
+      }
+      input.parentNode.insertBefore(newWrap, input);
+      newWrap.appendChild(input);
+      wrap = newWrap;
+    }
+    const btn = document.createElement('span');
+    btn.className = 'search-clear';
+    btn.textContent = '×';
+    btn.title = 'Clear';
+    wrap.appendChild(btn);
+    const update = () => btn.classList.toggle('show', input.value !== '');
+    input.addEventListener('input', update);
+    btn.addEventListener('click', () => {
+      input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.focus();
+      update();
+    });
+    update();
+  });
+}
+
+// Build dedupe-aware list. Group by DisplayName+DisplayVersion.
+// If a name appears as both 32 and 64, keep the 64-bit row and mark _arch='both'.
+function buildDisplayRows() {
+  const hideSys = $('hideSystem').checked;
+  const dedupe = $('dedupe').checked;
+
+  let rows = rawRows.filter(r => !hideSys || r.SystemComponent !== '1');
+
+  if (!dedupe) {
+    return rows.map(r => ({ ...r, _arch: isX86(r) ? '32' : '64', _twin: null }));
+  }
+
+  const groups = new Map();
+  rows.forEach(r => {
+    const key = `${r.DisplayName}|${r.DisplayVersion || ''}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  });
+
+  const result = [];
+  groups.forEach(group => {
+    if (group.length === 1) {
+      const r = group[0];
+      result.push({ ...r, _arch: isX86(r) ? '32' : '64', _twin: null });
+    } else {
+      // Prefer 64-bit row; merge fields from twin if missing
+      const x64 = group.find(r => !isX86(r));
+      const x86 = group.find(r => isX86(r));
+      const primary = x64 || group[0];
+      const twin = x64 ? x86 : group[1];
+      // Backfill missing fields from twin
+      const merged = { ...primary };
+      ['InstallDate', 'UninstallString', 'QuietUninstallString', 'Publisher'].forEach(f => {
+        if (!merged[f] && twin && twin[f]) merged[f] = twin[f];
+      });
+      result.push({ ...merged, _arch: (x64 && x86) ? 'both' : (isX86(primary) ? '32' : '64'), _twin: twin });
+    }
+  });
+  return result;
+}
+
+function computeKPIs() {
+  const visible = rawRows.filter(r => r.SystemComponent !== '1');
+  const sys = rawRows.length - visible.length;
+  const hkcu = visible.filter(isHKCU).length;
+
+  // Build unique-app counts via the same grouping logic
+  const groups = new Map();
+  visible.forEach(r => {
+    const key = `${r.DisplayName}|${r.DisplayVersion || ''}`;
+    if (!groups.has(key)) groups.set(key, { has32: false, has64: false });
+    const g = groups.get(key);
+    if (isX86(r)) g.has32 = true; else g.has64 = true;
+  });
+  let only32 = 0, only64 = 0, both = 0;
+  groups.forEach(g => {
+    if (g.has32 && g.has64) both++;
+    else if (g.has32) only32++;
+    else only64++;
+  });
+  const totalUnique = only32 + only64 + both;
+
+  $('kTotal').textContent = totalUnique;
+  $('k64').textContent = only64;
+  $('k32').textContent = only32;
+  $('kBoth').textContent = both;
+  $('kSys').textContent = sys;
+  $('kHkcu').textContent = hkcu;
+  $('k64Pct').textContent = totalUnique ? Math.round(only64/totalUnique*100) + '%' : '0%';
+  $('k32Pct').textContent = totalUnique ? Math.round(only32/totalUnique*100) + '%' : '0%';
+
+  $('heroTotal').textContent = totalUnique;
+  $('heroX64').textContent = only64;
+  $('heroX86').textContent = only32;
+  $('heroBoth').textContent = both;
+  $('heroSys').textContent = sys;
+}
+
+function sortRows(rows) {
+  return rows.slice().sort((a, b) => {
+    let va, vb;
+    if (sortKey === 'Arch') {
+      va = a._arch; vb = b._arch;
+    } else if (sortKey === 'Location') {
+      va = locationOf(a); vb = locationOf(b);
+    } else if (sortKey === 'InstallDate') {
+      // Empty dates sort last regardless of direction
+      va = a.InstallDate || ''; vb = b.InstallDate || '';
+      if (!va && vb) return 1;
+      if (va && !vb) return -1;
+    } else {
+      va = (a[sortKey] || '').toString().toLowerCase();
+      vb = (b[sortKey] || '').toString().toLowerCase();
+    }
+    if (va < vb) return sortDir === 'asc' ? -1 : 1;
+    if (va > vb) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+}
+
+function archBadge(arch) {
+  if (arch === 'both') return '<span class="badge badge-both">32 + 64</span>';
+  if (arch === '32') return '<span class="badge badge-32">32-bit</span>';
+  return '<span class="badge badge-64">64-bit</span>';
+}
+
+function renderTable() {
+  displayRows = buildDisplayRows();
+  const q = $('filter').value.toLowerCase();
+
+  let filtered = displayRows.filter(r => {
+    if (!q) return true;
+    return (r.DisplayName || '').toLowerCase().includes(q)
+        || (r.Publisher || '').toLowerCase().includes(q);
+  });
+  filtered = sortRows(filtered);
+
+  const tbody = $('rows');
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">No applications found.</td></tr>`;
+  } else {
+    tbody.innerHTML = filtered.map((r, i) => `
+      <tr data-idx="${displayRows.indexOf(r)}">
+        <td class="app-name">${esc(r.DisplayName)}</td>
+        <td class="version">${esc(r.DisplayVersion) || '—'}</td>
+        <td class="pub">${esc(r.Publisher) || '—'}</td>
+        <td class="date">${esc(fmtDate(r.InstallDate))}</td>
+        <td><span class="badge badge-${locationOf(r).toLowerCase()}">${locationOf(r)}</span></td>
+        <td>${archBadge(r._arch)}</td>
+      </tr>`).join('');
+  }
+  $('count').textContent = filtered.length;
+
+  document.querySelectorAll('thead th').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    const arrow = th.querySelector('.arrow');
+    if (th.dataset.sort === sortKey) {
+      th.classList.add(sortDir === 'asc' ? 'sort-asc' : 'sort-desc');
+      arrow.textContent = sortDir === 'asc' ? '▲' : '▼';
+    }
+  });
+}
+
+function showDetail(row) {
+  $('mTitle').textContent = row.DisplayName || 'Unknown';
+  $('mPub').textContent = row.Publisher || '';
+
+  const field = (label, val) => val ? `<div class="field"><div class="field-label">${label}</div><div class="field-value">${esc(val)}</div></div>` : '';
+  const fieldMono = (label, val) => val ? `<div class="field"><div class="field-label">${label}</div><div class="field-value mono">${esc(val)}</div></div>` : '';
+
+  let archLabel = row._arch === 'both' ? '32-bit + 64-bit (registered in both registry views)'
+                : row._arch === '32' ? '32-bit (WOW6432Node)' : '64-bit';
+
+  let html = `
+    ${field('Version', row.DisplayVersion)}
+    ${field('Install date', row.InstallDate ? fmtDate(row.InstallDate) : '— (not in registry)')}
+    ${field('Architecture', archLabel)}
+    ${field('Location', locationOf(row) + (isHKCU(row) ? ' (per-user install)' : ' (machine-wide install)'))}
+    ${fieldMono('Registry key', row.PSChildName)}
+    ${fieldMono('Full path', row.RegistryPath)}
+  `;
+
+  if (row._twin) {
+    html += `<div class="dedup-note">ℹ️ This app is also registered under <code>${esc(row._twin.RegistryPath)}</code>. Mirroring is normal for installers that target both 32-bit and 64-bit consumers.</div>`;
+  }
+
+  if (row.UninstallString || row.QuietUninstallString) {
+    html += '<div class="cmd-section"><h4>Uninstall commands</h4>';
+    if (row.UninstallString) {
+      html += `<div class="cmd-label">Standard</div><div class="cmd-row"><div class="cmd">${esc(row.UninstallString)}</div><button class="copy-btn" data-cmd="std">Copy</button></div>`;
+    }
+    if (row.QuietUninstallString) {
+      html += `<div class="cmd-label" style="margin-top:12px;">Silent</div><div class="cmd-row"><div class="cmd">${esc(row.QuietUninstallString)}</div><button class="copy-btn" data-cmd="quiet">Copy</button></div>`;
+    }
+    html += '</div>';
+  }
+
+  $('mBody').innerHTML = html;
+
+  $('mBody').querySelectorAll('.copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const text = btn.dataset.cmd === 'std' ? row.UninstallString : row.QuietUninstallString;
+      navigator.clipboard.writeText(text);
+      btn.textContent = '✓ Copied';
+      setTimeout(() => btn.textContent = 'Copy', 1500);
+    });
+  });
+
+  $('modal').classList.add('show');
+}
+
+function closeModal() { $('modal').classList.remove('show'); }
+
+// Parse a Windows .reg file into the same row shape as the CSV pipeline.
+// Sections become rows; only string/dword values we care about are extracted.
+// Input is the decoded text (caller handles UTF-16 LE decoding).
+function parseRegFile(text) {
+  const rows = [];
+  // Strip BOM if it survived decoding
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  // Stitch line-continuations (lines ending in backslash-then-newline are continued)
+  const stitched = text.replace(/\\\r?\n[ \t]*/g, '');
+  const lines = stitched.split(/\r?\n/);
+  let current = null;
+  for (let raw of lines) {
+    const line = raw.trim();
+    if (!line || line.startsWith(';')) continue;
+    if (line.startsWith('[') && line.endsWith(']')) {
+      if (current) rows.push(current);
+      const path = line.slice(1, -1);
+      // Only keep Uninstall keys
+      if (!/\\Uninstall\\/i.test(path) && !/\\Uninstall$/i.test(path)) {
+        current = null;
+        continue;
+      }
+      const lastSlash = path.lastIndexOf('\\');
+      current = {
+        RegistryPath: path,
+        PSChildName: lastSlash >= 0 ? path.slice(lastSlash + 1) : path
+      };
+      continue;
+    }
+    if (!current) continue;
+    // "name"="string" or "name"=dword:hex or "name"=hex(2):...
+    const m = line.match(/^"([^"]+)"=(.*)$/);
+    if (!m) continue;
+    const name = m[1];
+    const rawVal = m[2];
+    let value = null;
+    if (rawVal.startsWith('"')) {
+      // String — unescape \\ and \"
+      const end = rawVal.lastIndexOf('"');
+      if (end > 0) {
+        value = rawVal.slice(1, end).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+      }
+    } else if (rawVal.startsWith('dword:')) {
+      const hex = rawVal.slice(6).trim();
+      const n = parseInt(hex, 16);
+      value = Number.isFinite(n) ? String(n) : null;
+    }
+    // Multi-string / hex / etc — ignored for now (uninstall keys don't need them)
+    if (value == null) continue;
+    // Map to the same field names the CSV uses
+    const FIELDS = ['DisplayName','DisplayVersion','Publisher','InstallDate','UninstallString','QuietUninstallString','SystemComponent'];
+    if (FIELDS.includes(name)) current[name] = value;
+  }
+  if (current) rows.push(current);
+  return rows.filter(r => r.DisplayName && r.DisplayName.trim());
+}
+
+// Decode bytes from a .reg file. Most are UTF-16 LE with a 0xFF 0xFE BOM
+// (Windows default). Fall back to UTF-8 if no BOM is present.
+function decodeRegBytes(buffer) {
+  const view = new Uint8Array(buffer);
+  if (view.length >= 2 && view[0] === 0xFF && view[1] === 0xFE) {
+    return new TextDecoder('utf-16le').decode(view.subarray(2));
+  }
+  if (view.length >= 2 && view[0] === 0xFE && view[1] === 0xFF) {
+    return new TextDecoder('utf-16be').decode(view.subarray(2));
+  }
+  if (view.length >= 3 && view[0] === 0xEF && view[1] === 0xBB && view[2] === 0xBF) {
+    return new TextDecoder('utf-8').decode(view.subarray(3));
+  }
+  return new TextDecoder('utf-8').decode(view);
+}
+
+function detectFormat(file) {
+  const name = (file.name || '').toLowerCase();
+  if (name.endsWith('.reg')) return 'reg';
+  if (name.endsWith('.csv')) return 'csv';
+  return 'csv'; // default
+}
+
+function parseCsvAsync(file) {
+  return new Promise(resolve => {
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: results => resolve(results.data.filter(r => r.DisplayName && r.DisplayName.trim()))
+    });
+  });
+}
+
+function parseRegAsync(file) {
+  return file.arrayBuffer().then(buf => parseRegFile(decodeRegBytes(buf)));
+}
+
+async function handleFiles(fileList, mode) {
+  // mode: 'replace' on first drop, 'append' on subsequent drops via "Replace / add files"
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  let collected = [];
+  for (const f of files) {
+    const fmt = detectFormat(f);
+    if (fmt === 'reg') collected = collected.concat(await parseRegAsync(f));
+    else collected = collected.concat(await parseCsvAsync(f));
+  }
+  rawRows = mode === 'append' ? rawRows.concat(collected) : collected;
+  $('uploadPrompt').style.display = 'none';
+  $('dashboard').style.display = 'block';
+  computeKPIs();
+  renderTable();
+}
+
+$('csvFile').addEventListener('change', e => e.target.files.length && handleFiles(e.target.files, 'replace'));
+$('csvFile2').addEventListener('change', e => e.target.files.length && handleFiles(e.target.files, rawRows.length ? 'append' : 'replace'));
+$('filter').addEventListener('input', renderTable);
+$('hideSystem').addEventListener('change', () => { computeKPIs(); renderTable(); });
+$('dedupe').addEventListener('change', renderTable);
+
+document.querySelectorAll('thead th').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.sort;
+    if (sortKey === key) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    else { sortKey = key; sortDir = 'asc'; }
+    renderTable();
+  });
+});
+
+$('rows').addEventListener('click', e => {
+  const tr = e.target.closest('tr[data-idx]');
+  if (tr) showDetail(displayRows[+tr.dataset.idx]);
+});
+
+$('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+
+// ============================================================
+// Intune tab
+// ============================================================
+const TAB_LOCAL = 'local', TAB_INTUNE = 'intune', TAB_ANALYZE = 'analyze', TAB_SETTINGS = 'settings';
+
+// Windows app @odata.type discriminators
+const WIN_TYPES = new Set([
+  '#microsoft.graph.win32LobApp',
+  '#microsoft.graph.win32CatalogApp',
+  '#microsoft.graph.windowsMobileMSI',
+  '#microsoft.graph.microsoftStoreForBusinessApp',
+  '#microsoft.graph.winGetApp',
+  '#microsoft.graph.officeSuiteApp',
+  '#microsoft.graph.windowsUniversalAppX',
+  '#microsoft.graph.windowsAppX',
+  '#microsoft.graph.microsoftEdgeApp'
+]);
+
+// Map an app @odata.type to a coarse platform label
+function platformFromOdataType(t) {
+  if (!t) return 'Other';
+  if (WIN_TYPES.has(t)) return 'Windows';
+  const s = t.toLowerCase();
+  if (s.includes('android')) return 'Android';
+  if (s.includes('ios')) return 'iOS';
+  if (s.includes('macos') || s.includes('osx')) return 'macOS';
+  return 'Other';
+}
+
+function appPortalUrl(id) {
+  return `https://intune.microsoft.com/#view/Microsoft_Intune_Apps/SettingsMenu/~/0/appId/${encodeURIComponent(id)}`;
+}
+
+// Win32 install context from installExperience.runAsAccount ('system' | 'user').
+function runAsFromApp(app) {
+  const r = (app && app.installExperience && app.installExperience.runAsAccount)
+    || (app && app.runAsAccount)
+    || null;
+  if (!r) return null;
+  const s = String(r).toLowerCase();
+  if (s === 'system' || s === 'user') return s;
+  return s;
+}
+
+function contextBadgeHtml(runAs) {
+  if (!runAs) return `<span class="context-badge context-unknown" title="Install context not exposed for this app type">N/A</span>`;
+  if (runAs === 'system') return `<span class="context-badge context-system" title="installExperience.runAsAccount = system">SYSTEM</span>`;
+  if (runAs === 'user') return `<span class="context-badge context-user" title="installExperience.runAsAccount = user">USER</span>`;
+  return `<span class="context-badge context-unknown">${esc(String(runAs).toUpperCase())}</span>`;
+}
+
+function targetLabel(targets) {
+  if (!targets || !targets.size) return '—';
+  const labels = [];
+  if (targets.has('allDevices')) labels.push('All Devices');
+  if (targets.has('allUsers')) labels.push('All Users');
+  if (targets.has('group')) labels.push('Group');
+  return labels.join(', ') || '—';
+}
+
+// Column table for Required / Uninstall (aligned, not a crammed meta line).
+function appAssignmentTableHtml(rows, mode) {
+  // mode: 'required' | 'uninstall'
+  if (!rows.length) {
+    return `<div class="loading" style="padding:24px;">${mode === 'uninstall' ? 'No uninstall apps found.' : 'No required apps found.'}</div>`;
+  }
+  const head = mode === 'uninstall'
+    ? `<th>App</th><th>Publisher</th><th>Platform</th><th>Context</th><th>Groups</th><th></th>`
+    : `<th>App</th><th>Publisher</th><th>Platform</th><th>Context</th><th>Target</th><th></th>`;
+  const body = rows.map(a => {
+    const nameLink = `<a href="${appPortalUrl(a.id)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none; font-weight:600;">${esc(a.name)}</a>`;
+    const last = mode === 'uninstall'
+      ? `<td>${a.groupCount || 0}</td>`
+      : `<td>${esc(targetLabel(a.targets))}</td>`;
+    return `<tr>
+      <td>${nameLink}</td>
+      <td>${esc(a.publisher) || '—'}</td>
+      <td>${esc(a.platform) || '—'}</td>
+      <td>${contextBadgeHtml(a.runAs)}</td>
+      ${last}
+      <td style="text-align:right; white-space:nowrap;"><a href="${appPortalUrl(a.id)}" target="_blank" rel="noopener noreferrer" class="pub-small" style="color:var(--accent); text-decoration:none;">Open ↗</a></td>
+    </tr>`;
+  }).join('');
+  return `<div class="table-scroll"><table class="app-assign-table">
+    <thead><tr>${head}</tr></thead>
+    <tbody>${body}</tbody>
+  </table></div>`;
+}
+
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+});
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  $('viewLocal').style.display = tab === TAB_LOCAL ? '' : 'none';
+  $('viewIntune').style.display = tab === TAB_INTUNE ? '' : 'none';
+  $('viewAnalyze').style.display = tab === TAB_ANALYZE ? '' : 'none';
+  $('viewSettings').style.display = tab === TAB_SETTINGS ? '' : 'none';
+  if (tab === TAB_INTUNE) initIntune();
+  persistLlmSettings({ announce: false });
+  placeThemeToggle();
+}
+
+// Dock the theme toggle inside the auth-bar pill when that pill is on screen
+// (signed-in Intune view); otherwise let it float in the top-right corner.
+function placeThemeToggle() {
+  const t = $('themeToggle');
+  if (!t) return;
+  const bar = document.querySelector('#intuneSignedIn .auth-bar');
+  const visible = bar && !document.documentElement.classList.contains('locked')
+    && $('viewIntune').style.display !== 'none';
+  const host = visible ? bar : document.body;
+  if (t.parentNode !== host) host.appendChild(t);
+}
+
+// --- MSAL (config + SCOPES live in js/msal-config.js) ---
+let msalApp = null;
+let intuneInit = false;
+let intuneApps = [];
+let intuneAppsFiltered = [];
+let failedAppsLoaded = false;
+let selectedApp = null;
+let failedRows = [];
+let failedSortKey = 'DeviceName';
+let failedSortDir = 'asc';
+
+async function initIntune() {
+  if (intuneInit) return;
+  intuneInit = true;
+  if (typeof msal === 'undefined') {
+    showIntuneError('MSAL library failed to load. Check your network or CDN access.');
+    return;
+  }
+  // Entra rejects file:// as a redirectUri scheme (AADSTS500111), so opening
+  // index.html by double-clicking fails sign-in. Tell the user up front
+  // rather than letting MSAL throw a cryptic error mid-popup.
+  if (location.protocol === 'file:') {
+    $('intuneError').innerHTML =
+      '<div class="error-banner">' +
+      'Sign-in won’t work when this page is opened as a local file ' +
+      '(<code>file://</code>). Entra only accepts <code>http://localhost</code> ' +
+      'or <code>https://</code> redirect URIs. Either use the hosted version at ' +
+      '<a href="https://haavarstein.github.io/intune-dashboard/" target="_blank" rel="noopener">' +
+      'haavarstein.github.io/intune-dashboard</a>, or serve the folder over ' +
+      'HTTP locally (e.g. <code>python -m http.server 8080</code> then open ' +
+      '<code>http://localhost:8080/</code>).' +
+      '</div>';
+    return;
+  }
+  msalApp = new msal.PublicClientApplication(MSAL_CONFIG);
+  await msalApp.initialize();
+  const accounts = msalApp.getAllAccounts();
+  if (accounts.length) {
+    msalApp.setActiveAccount(accounts[0]);
+    onSignedIn(accounts[0]);
+  }
+  document.dispatchEvent(new CustomEvent('brays-msal'));
+}
+
+$('btnSignIn').addEventListener('click', async () => {
+  try {
+    if (!msalApp) throw new Error('MSAL not initialized');
+    const result = await msalApp.loginPopup({ scopes: SCOPES });
+    msalApp.setActiveAccount(result.account);
+    onSignedIn(result.account);
+  } catch (e) {
+    console.error('Sign-in failed', e);
+    showIntuneError('Sign-in failed: ' + (e.message || e));
+  }
+});
+
+$('btnSignOut').addEventListener('click', async () => {
+  clearAccessTokenCache();
+  await msalApp.logoutPopup();
+  document.documentElement.classList.add('locked'); // back to the gate
+  $('intuneSignedIn').style.display = 'none';
+  $('intuneSignedOut').style.display = '';
+  placeThemeToggle();
+  document.dispatchEvent(new CustomEvent('brays-auth', { detail: null }));
+});
+
+function onSignedIn(account) {
+  document.documentElement.classList.remove('locked'); // reveal masthead + tabs
+  $('intuneSignedOut').style.display = 'none';
+  $('intuneSignedIn').style.display = '';
+  $('userName').textContent = account.name || account.username;
+  placeThemeToggle();
+  renderCustomerSwitcher();
+  loadOverview();
+  refreshApprovalsBadge(); // background — badge shows pending count without opening the tab
+  document.dispatchEvent(new CustomEvent('brays-auth', {
+    detail: {
+      name: account.name || account.username || 'Signed in',
+      email: account.username || '',
+      tenantId: account.tenantId || ''
+    }
+  }));
+}
+
+// ============================================================
+// Multi-customer (MSP) tenant switcher
+// Stores only {code, label?, email} per customer in localStorage.
+// MSAL still uses sessionStorage (no refresh tokens persisted).
+// Switching uses loginPopup({ loginHint }) first time per session,
+// then setActiveAccount silently for return visits.
+// ============================================================
+
+const CUSTOMERS_KEY = 'intuneDashboard:customers';
+
+function loadCustomers() {
+  try {
+    const raw = localStorage.getItem(CUSTOMERS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+function saveCustomers(list) {
+  localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(list));
+}
+
+function getActiveCustomerCode() {
+  if (!msalApp) return null;
+  const account = msalApp.getActiveAccount();
+  if (!account) return null;
+  const upn = (account.username || '').toLowerCase();
+  const match = loadCustomers().find(c => (c.email || '').toLowerCase() === upn);
+  return match ? match.code : null;
+}
+
+function renderCustomerSwitcher() {
+  const customers = loadCustomers();
+  const switcher = $('customerSwitcher');
+  if (customers.length < 2) {
+    switcher.style.display = 'none';
+    return;
+  }
+  switcher.style.display = '';
+  const activeCode = getActiveCustomerCode();
+  $('customerSwitcherActive').textContent = activeCode || '—';
+
+  $('customerSwitcherMenu').innerHTML = customers.map(c => {
+    const isActive = c.code === activeCode;
+    return `<div class="customer-menu-item" data-customer-code="${esc(c.code)}" style="padding:10px 14px; cursor:pointer; ${isActive ? 'background:var(--accent-soft);' : ''} border-bottom:1px solid var(--line);">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-weight:700; min-width:32px;">${esc(c.code)}</span>
+        <span style="font-size:12px; color:var(--ink-2); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(c.email)}</span>
+        ${isActive ? '<span style="color:var(--accent); font-weight:600; font-size:11px;">active</span>' : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+const EMAIL_RX = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const GUID_RX  = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function parseApprovers(raw) {
+  return (raw || '')
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(s => s.length > 0);
+}
+
+function renderCustomersList() {
+  const customers = loadCustomers();
+  const box = $('customersList');
+  if (!customers.length) {
+    box.innerHTML = `<div class="meta" style="padding:14px 16px; font-size:12px;">No customers configured. Add one below.</div>`;
+    renderMailLog();
+    return;
+  }
+  // Duplicate login emails break the UPN → customer match: the first match
+  // wins, so MAA notifications may use the wrong approver list.
+  const emailCounts = {};
+  customers.forEach(c => { const e2 = (c.email || '').toLowerCase(); if (e2) emailCounts[e2] = (emailCounts[e2] || 0) + 1; });
+  const dups = Object.keys(emailCounts).filter(k => emailCounts[k] > 1);
+  const dupWarning = dups.length
+    ? `<div style="padding:10px 14px; border-bottom:1px solid var(--line); background:#fff7e6; color:#704500; font-size:12px;">⚠ Multiple customers share the login email ${dups.map(d => `<strong>${esc(d)}</strong>`).join(', ')}. MAA notifications match the signed-in account to the <em>first</em> customer with that email, so the wrong approver list may be used — give each customer a unique login email.</div>`
+    : '';
+  box.innerHTML = dupWarning + customers.map((c, i) => {
+    const approvers = c.approvers || [];
+    const approverLine = approvers.length
+      ? `<span data-customer-approvers="${esc(c.code)}" style="cursor:pointer; color:var(--ink-2);" title="Click to edit">📧 ${approvers.length} approver${approvers.length === 1 ? '' : 's'} — ${esc(approvers.join(', '))}</span>
+         <span data-test-approvers="${esc(c.code)}" style="cursor:pointer; color:var(--accent); font-weight:600; margin-left:8px;" title="Send a test notification to these approvers from your mailbox — same Graph path as the real MAA email (requires sign-in; Mail.Send consent on first use)">✉ Send test</span>
+         <span id="testStatus_${esc(c.code)}" style="margin-left:6px;"></span>`
+      : `<span data-customer-approvers="${esc(c.code)}" style="cursor:pointer; color:var(--muted);" title="Click to add">📧 No approvers (click to add)</span>`;
+    const meteringId = c.meteringScriptId || '';
+    const meteringLine = meteringId
+      ? `<span data-customer-metering="${esc(c.code)}" style="cursor:pointer; color:var(--ink-2); font-family:ui-monospace, monospace;" title="Click to edit">🔧 Metering: ${esc(meteringId.slice(0, 8))}…${esc(meteringId.slice(-4))}</span>`
+      : `<span data-customer-metering="${esc(c.code)}" style="cursor:pointer; color:var(--muted);" title="Click to add">🔧 No metering script (click to add)</span>`;
+    const imeId = c.imeCheckinScriptId || '';
+    const imeLine = imeId
+      ? `<span data-customer-ime="${esc(c.code)}" style="cursor:pointer; color:var(--ink-2); font-family:ui-monospace, monospace;" title="Click to edit">⚡ IME check-in: ${esc(imeId.slice(0, 8))}…${esc(imeId.slice(-4))}</span>`
+      : `<span data-customer-ime="${esc(c.code)}" style="cursor:pointer; color:var(--muted);" title="Click to add">⚡ No IME check-in script (click to add)</span>`;
+    return `
+    <div style="padding:10px 14px; ${i < customers.length - 1 ? 'border-bottom:1px solid var(--line);' : ''}">
+      <div style="display:flex; align-items:center; gap:12px;">
+        <span style="font-weight:700; min-width:36px;">${esc(c.code)}</span>
+        <span class="meta" style="flex:1; font-size:13px;">${esc(c.email)}</span>
+        <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px;" data-customer-delete="${esc(c.code)}" title="Remove">🗑</span>
+      </div>
+      <div style="font-size:11px; margin-top:4px; padding-left:48px;">${approverLine}</div>
+      <div style="font-size:11px; margin-top:4px; padding-left:48px;">${meteringLine}</div>
+      <div style="font-size:11px; margin-top:4px; padding-left:48px;">${imeLine}</div>
+    </div>
+  `;
+  }).join('');
+  renderMailLog();
+}
+
+// Send a test approver notification through the exact same Graph path as a
+// real MAA submission, so the mail pipeline can be verified without deleting
+// anything. Surfaces the mapped error inline on failure.
+async function testApprovers(code) {
+  const customer = loadCustomers().find(c => c.code === code);
+  const approvers = (customer && customer.approvers) || [];
+  const status = $('testStatus_' + code);
+  if (!approvers.length || !status) return;
+  const account = msalApp && msalApp.getActiveAccount();
+  if (!account) {
+    status.innerHTML = `<span style="color:#8a2020;">Sign in first — the test email sends from your mailbox.</span>`;
+    return;
+  }
+  status.textContent = 'Sending…';
+  const upn = (account.username || '').toLowerCase();
+  try {
+    await sendApprovalNotification({
+      test: true,
+      app: { displayName: '(test — no app)', id: '—' },
+      approvalCode: null,
+      justification: 'Test notification triggered from Settings → Customers. No delete was submitted.',
+      approvers,
+      customer,
+      requester: { name: account.name || upn, email: upn }
+    });
+    logMailAttempt({ kind: 'test', customer: code, approvers, result: 'sent' });
+    status.innerHTML = `<span style="color:#1f5d33;">✓ Sent from ${esc(upn)} — check the recipients' inbox (and spam).</span>`;
+  } catch (e) {
+    const raw = e.message || String(e);
+    logMailAttempt({ kind: 'test', customer: code, approvers, result: 'failed', error: raw });
+    const hint = friendlyMailError(raw);
+    status.innerHTML = `<span style="color:#8a2020;">✗ ${esc(hint || raw)}</span>${hint ? `<span style="color:var(--muted); font-size:10px;"> — ${esc(raw.slice(0, 180))}</span>` : ''}`;
+  }
+  renderMailLog();
+}
+
+function editApprovers(code) {
+  const customers = loadCustomers();
+  const customer = customers.find(c => c.code === code);
+  if (!customer) return;
+  const current = (customer.approvers || []).join(', ');
+  const span = document.querySelector(`[data-customer-approvers="${code}"]`);
+  if (!span) return;
+  span.outerHTML = `
+    <span data-editing-approvers="${esc(code)}" style="display:inline-flex; gap:6px; align-items:center; width:100%;">
+      <input type="text" id="editApprovers_${esc(code)}" class="search" style="flex:1; font-size:12px; padding:4px 8px;" value="${esc(current)}" placeholder="Comma-separated emails (leave empty to clear)">
+      <button class="btn" data-save-approvers="${esc(code)}" style="padding:4px 10px; font-size:11px;">Save</button>
+      <button class="btn btn-ghost" data-cancel-approvers="${esc(code)}" style="padding:4px 10px; font-size:11px;">Cancel</button>
+    </span>
+  `;
+  setTimeout(() => $('editApprovers_' + code)?.focus(), 0);
+  attachSearchClearButtons($('customersList'));
+}
+
+function saveApprovers(code) {
+  const input = $('editApprovers_' + code);
+  if (!input) return;
+  const approvers = parseApprovers(input.value);
+  const invalid = approvers.find(a => !EMAIL_RX.test(a));
+  if (invalid) {
+    alert(`"${invalid}" doesn't look like a valid email address.`);
+    return;
+  }
+  const customers = loadCustomers();
+  const idx = customers.findIndex(c => c.code === code);
+  if (idx === -1) return;
+  customers[idx] = { ...customers[idx], approvers };
+  saveCustomers(customers);
+  renderCustomersList();
+}
+
+function editMeteringId(code) {
+  const customers = loadCustomers();
+  const customer = customers.find(c => c.code === code);
+  if (!customer) return;
+  const current = customer.meteringScriptId || '';
+  const span = document.querySelector(`[data-customer-metering="${code}"]`);
+  if (!span) return;
+  span.outerHTML = `
+    <span data-editing-metering="${esc(code)}" style="display:inline-flex; gap:6px; align-items:center; width:100%;">
+      <input type="text" id="editMetering_${esc(code)}" class="search" style="flex:1; font-size:12px; padding:4px 8px; font-family:ui-monospace, monospace;" value="${esc(current)}" placeholder="GUID from Intune script (leave empty to disable)">
+      <button class="btn" data-save-metering="${esc(code)}" style="padding:4px 10px; font-size:11px;">Save</button>
+      <button class="btn btn-ghost" data-cancel-metering="${esc(code)}" style="padding:4px 10px; font-size:11px;">Cancel</button>
+    </span>
+  `;
+  setTimeout(() => $('editMetering_' + code)?.focus(), 0);
+  attachSearchClearButtons($('customersList'));
+}
+
+function saveMeteringId(code) {
+  const input = $('editMetering_' + code);
+  if (!input) return;
+  const raw = (input.value || '').trim().toLowerCase();
+  if (raw && !GUID_RX.test(raw)) {
+    alert(`"${raw}" doesn't look like a GUID. Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`);
+    return;
+  }
+  const customers = loadCustomers();
+  const idx = customers.findIndex(c => c.code === code);
+  if (idx === -1) return;
+  customers[idx] = { ...customers[idx], meteringScriptId: raw || undefined };
+  saveCustomers(customers);
+  renderCustomersList();
+}
+
+function editImeId(code) {
+  const customers = loadCustomers();
+  const customer = customers.find(c => c.code === code);
+  if (!customer) return;
+  const current = customer.imeCheckinScriptId || '';
+  const span = document.querySelector(`[data-customer-ime="${code}"]`);
+  if (!span) return;
+  span.outerHTML = `
+    <span data-editing-ime="${esc(code)}" style="display:inline-flex; gap:6px; align-items:center; width:100%;">
+      <input type="text" id="editIme_${esc(code)}" class="search" style="flex:1; font-size:12px; padding:4px 8px; font-family:ui-monospace, monospace;" value="${esc(current)}" placeholder="GUID from Intune script (leave empty to disable)">
+      <button class="btn" data-save-ime="${esc(code)}" style="padding:4px 10px; font-size:11px;">Save</button>
+      <button class="btn btn-ghost" data-cancel-ime="${esc(code)}" style="padding:4px 10px; font-size:11px;">Cancel</button>
+    </span>
+  `;
+  setTimeout(() => $('editIme_' + code)?.focus(), 0);
+  attachSearchClearButtons($('customersList'));
+}
+
+function saveImeId(code) {
+  const input = $('editIme_' + code);
+  if (!input) return;
+  const raw = (input.value || '').trim().toLowerCase();
+  if (raw && !GUID_RX.test(raw)) {
+    alert(`"${raw}" doesn't look like a GUID. Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`);
+    return;
+  }
+  const customers = loadCustomers();
+  const idx = customers.findIndex(c => c.code === code);
+  if (idx === -1) return;
+  customers[idx] = { ...customers[idx], imeCheckinScriptId: raw || undefined };
+  saveCustomers(customers);
+  renderCustomersList();
+  if (typeof renderRemediationImeStatus === 'function') renderRemediationImeStatus();
+}
+
+function addCustomer() {
+  const code = ($('customerCodeInput').value || '').trim().toUpperCase();
+  const email = ($('customerEmailInput').value || '').trim().toLowerCase();
+  const approvers = parseApprovers($('customerApproversInput').value);
+  const meteringScriptId = ($('customerMeteringIdInput').value || '').trim().toLowerCase();
+  const imeCheckinScriptId = ($('customerImeIdInput').value || '').trim().toLowerCase();
+  const status = $('customerAddStatus');
+  if (!code || code.length > 4) { status.textContent = 'Code is required (max 4 chars).'; return; }
+  if (!EMAIL_RX.test(email)) { status.textContent = 'Email looks invalid.'; return; }
+  const invalidApprover = approvers.find(a => !EMAIL_RX.test(a));
+  if (invalidApprover) { status.textContent = `Approver "${invalidApprover}" looks invalid.`; return; }
+  if (meteringScriptId && !GUID_RX.test(meteringScriptId)) { status.textContent = `Metering script ID must be a GUID (or empty).`; return; }
+  if (imeCheckinScriptId && !GUID_RX.test(imeCheckinScriptId)) { status.textContent = `IME check-in script ID must be a GUID (or empty).`; return; }
+  const customers = loadCustomers();
+  if (customers.some(c => c.code === code)) { status.textContent = `Code "${code}" is already used.`; return; }
+  const newCustomer = { code, email, approvers };
+  if (meteringScriptId) newCustomer.meteringScriptId = meteringScriptId;
+  if (imeCheckinScriptId) newCustomer.imeCheckinScriptId = imeCheckinScriptId;
+  customers.push(newCustomer);
+  saveCustomers(customers);
+  $('customerCodeInput').value = '';
+  $('customerEmailInput').value = '';
+  $('customerApproversInput').value = '';
+  $('customerMeteringIdInput').value = '';
+  $('customerImeIdInput').value = '';
+  status.textContent = `Added ${code}.`;
+  setTimeout(() => { status.textContent = ''; }, 2000);
+  renderCustomersList();
+  renderCustomerSwitcher();
+}
+
+function deleteCustomer(code) {
+  const customers = loadCustomers().filter(c => c.code !== code);
+  saveCustomers(customers);
+  renderCustomersList();
+  renderCustomerSwitcher();
+}
+
+// Clear every sub-tab's cached state. Called when switching tenants
+// so the next tab open re-fetches against the new tenant.
+function resetTenantState() {
+  clearAccessTokenCache();
+  hwLoadGen++; // abandon any in-flight Hardware RAM fan-out
+  assignmentsLoadGen++;
+  if (typeof hwAbort !== 'undefined' && hwAbort) { try { hwAbort.abort(); } catch (_) {} }
+  if (typeof assignmentsAbort !== 'undefined' && assignmentsAbort) { try { assignmentsAbort.abort(); } catch (_) {} }
+  // Hardware
+  hwLoaded = false; hwDevices = []; hwTileFilter = null;
+  // Installed
+  installedAppsLoaded = false; installedApps = []; installedAppsFiltered = [];
+  installedZeroSet = null; installedZeroFilter = false;
+  if ($('installedTiles')) { $('installedTiles').style.display = 'none'; $('instTileZero').style.outline = ''; $('instTileZeroVal').textContent = '…'; }
+  selectedApp = null; installedRows = [];
+  if ($('installedAppPicker')) $('installedAppPicker').style.display = '';
+  if ($('installedView')) $('installedView').style.display = 'none';
+  // Failed
+  failedAppsLoaded = false; intuneApps = []; intuneAppsFiltered = []; failedRows = [];
+  errorClusterLoaded = false; errorClusterRows = [];
+  if ($('appPicker')) $('appPicker').style.display = '';
+  if ($('failedView')) $('failedView').style.display = 'none';
+  // Required / Uninstall
+  requiredLoaded = false; requiredApps = [];
+  uninstallLoaded = false; uninstallApps = [];
+  // Assignments
+  assignmentsPoliciesLoaded = false;
+  assignmentsRaw = { apps: [], configs: [], compliance: [], healthScripts: [], settingsCatalog: [], psScripts: [], updateProfiles: [] };
+  assignmentsSelectedGroup = null;
+  // Posture
+  postureLoaded = false; postureLoading = false; postureTileFilter = null;
+  postureComp = null; postureCa = null; postureCaGranted = null;
+  // Approvals
+  approvalsLoaded = false; approvalsRaw = [];
+  const _ab = $('approvalsBadge'); if (_ab) _ab.style.display = 'none';
+  // Autopilot
+  autopilotLoaded = false; autopilotRows = [];
+  if (typeof autopilotV2Count !== 'undefined') autopilotV2Count = null;
+  if (typeof autopilotSelected !== 'undefined') autopilotSelected.clear();
+  deviceLinkDevices = [];
+  if (typeof deviceLinkAbort !== 'undefined' && deviceLinkAbort) { try { deviceLinkAbort.abort(); } catch (_) {} }
+  // BitLocker
+  bitlockerLoaded = false; bitlockerRows = [];
+  // Secure Boot
+  securebootLoadGen++;
+  if (securebootAbort) { try { securebootAbort.abort(); } catch (_) {} }
+  securebootLoaded = false; securebootRows = []; securebootTileFilter = null;
+  // Disk space
+  diskspaceLoaded = false; diskspaceRows = [];
+  // App versions (version sprawl)
+  appversionsLoaded = false; appversionsLoading = false; appverApps = []; appverFiltered = [];
+  appverTileFilter = null; appverSelectedApp = null;
+  if ($('appverAppsView')) $('appverAppsView').style.display = '';
+  if ($('appverDrillView')) $('appverDrillView').style.display = 'none';
+  // Management health
+  certhealthLoaded = false; certhealthRows = []; chSelected.clear();
+  // Stale users
+  staleusersLoaded = false; staleusersLoading = false; staleusersRows = [];
+  staleusersTileFilter = null; staleusersP1Gated = false;
+  // Remediation / Vulnerabilities
+  remediationLoaded = false; remediationRows = [];
+  vulnLoaded = false; vulnRows = [];
+  // Drift
+  driftLoaded = false; driftLoading = false; driftApps = []; driftFiltered = [];
+  // Software Metering
+  meteringLoaded = false; meteringLoading = false; meteringSnapshots = [];
+  meteringAggregated = []; meteringFiltered = [];
+  meteringTileFilter = null; meteringSelectedApp = null; meteringDecodeFailures = 0;
+  if ($('meteringAppsView')) $('meteringAppsView').style.display = '';
+  if ($('meteringDrillView')) $('meteringDrillView').style.display = 'none';
+  // Overview
+  overviewLoaded = false; overviewLoading = false;
+  // PMPC
+  pmpcAppIds = new Set(); pmpcAppIdsLoaded = false; pmpcAppIdsPromise = null;
+}
+
+async function switchToCustomer(code) {
+  const customer = loadCustomers().find(c => c.code === code);
+  if (!customer || !msalApp) return;
+
+  const accounts = msalApp.getAllAccounts();
+  const cached = accounts.find(a => (a.username || '').toLowerCase() === customer.email.toLowerCase());
+
+  try {
+    if (cached) {
+      msalApp.setActiveAccount(cached);
+    } else {
+      const result = await msalApp.loginPopup({ scopes: SCOPES, loginHint: customer.email });
+      msalApp.setActiveAccount(result.account);
+    }
+    resetTenantState();
+    onSignedIn(msalApp.getActiveAccount());
+    switchSubtab('overview');
+  } catch (e) {
+    console.error('Customer switch failed', e);
+    showIntuneError('Switch failed: ' + (e.message || e));
+  }
+}
+
+$('btnAddCustomer').addEventListener('click', addCustomer);
+$('customerEmailInput').addEventListener('keydown', e => { if (e.key === 'Enter') addCustomer(); });
+$('customerApproversInput').addEventListener('keydown', e => { if (e.key === 'Enter') addCustomer(); });
+$('customerMeteringIdInput').addEventListener('keydown', e => { if (e.key === 'Enter') addCustomer(); });
+$('customerImeIdInput').addEventListener('keydown', e => { if (e.key === 'Enter') addCustomer(); });
+$('customersList').addEventListener('click', e => {
+  const ds = e.target.dataset || {};
+  if (ds.customerDelete) { deleteCustomer(ds.customerDelete); return; }
+  if (ds.customerApprovers) { editApprovers(ds.customerApprovers); return; }
+  if (ds.testApprovers) { testApprovers(ds.testApprovers); return; }
+  if (ds.saveApprovers) { saveApprovers(ds.saveApprovers); return; }
+  if (ds.cancelApprovers) { renderCustomersList(); return; }
+  if (ds.customerMetering) { editMeteringId(ds.customerMetering); return; }
+  if (ds.saveMetering) { saveMeteringId(ds.saveMetering); return; }
+  if (ds.cancelMetering) { renderCustomersList(); return; }
+  if (ds.customerIme) { editImeId(ds.customerIme); return; }
+  if (ds.saveIme) { saveImeId(ds.saveIme); return; }
+  if (ds.cancelIme) { renderCustomersList(); return; }
+});
+
+$('customerSwitcherToggle').addEventListener('click', e => {
+  e.stopPropagation();
+  const menu = $('customerSwitcherMenu');
+  menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+});
+document.addEventListener('click', e => {
+  if (!$('customerSwitcher').contains(e.target)) {
+    $('customerSwitcherMenu').style.display = 'none';
+  }
+});
+$('customerSwitcherMenu').addEventListener('click', e => {
+  const item = e.target.closest('[data-customer-code]');
+  if (!item) return;
+  $('customerSwitcherMenu').style.display = 'none';
+  switchToCustomer(item.dataset.customerCode);
+});
+
+// Render the customers list on page load so Settings reflects state immediately
+renderCustomersList();
+
+// Inject × clear buttons on every existing input.search; idempotent on re-runs.
+attachSearchClearButtons();
+
+// Cache the read-scope access token briefly so large fan-outs (Hardware RAM
+// GETs, error clustering) do not call acquireTokenSilent thousands of times.
+let _accessTokenCache = { token: null, expiresAt: 0 };
+function clearAccessTokenCache() { _accessTokenCache = { token: null, expiresAt: 0 }; }
+
+async function getToken() {
+  if (_accessTokenCache.token && Date.now() < _accessTokenCache.expiresAt) {
+    return _accessTokenCache.token;
+  }
+  try {
+    const r = await msalApp.acquireTokenSilent({ scopes: SCOPES, account: msalApp.getActiveAccount() });
+    const exp = r.expiresOn instanceof Date
+      ? r.expiresOn.getTime() - 60_000
+      : Date.now() + 4 * 60_000;
+    _accessTokenCache = { token: r.accessToken, expiresAt: exp };
+    return r.accessToken;
+  } catch (e) {
+    const r = await msalApp.acquireTokenPopup({ scopes: SCOPES });
+    const exp = r.expiresOn instanceof Date
+      ? r.expiresOn.getTime() - 60_000
+      : Date.now() + 4 * 60_000;
+    _accessTokenCache = { token: r.accessToken, expiresAt: exp };
+    return r.accessToken;
+  }
+}
+
+// Just-in-time consent for a scope outside the static (read-only) SCOPES array.
+// Mints a token carrying exactly that scope; the first use triggers a consent
+// popup, after which it resolves silently. We verify the granted scopes on the
+// response because acquireTokenSilent can mint from a refresh token that was
+// never consented to the requested scope and return a token without it.
+async function ensureScopeToken(scope) {
+  if (!msalApp) throw new Error('not signed in');
+  const account = msalApp.getActiveAccount();
+  const granted = (r) => (r && r.scopes || []).some(s => s.toLowerCase() === scope.toLowerCase());
+  try {
+    const r = await msalApp.acquireTokenSilent({ scopes: [scope], account });
+    if (granted(r)) return r.accessToken;
+  } catch (_) { /* fall through to popup */ }
+  const r = await msalApp.acquireTokenPopup({ scopes: [scope], account });
+  if (!granted(r)) throw new Error(`Consent for ${scope} was not granted.`);
+  return r.accessToken;
+}
+
+// Graph helpers: js/graph.js (graphFetch / graphGet / graphPost / graphPatch / graphDelete / graphGetAll)
+
+// Deep link straight to Intune's Multi Admin Approval blade (Tenant
+// administration → Multi Admin Approval), used in the approver email and the
+// post-submit panel so approvers land on the queue in one click.
+const MAA_BLADE_URL = 'https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/TenantAdminMenu/~/multiAdminApproval';
+
+// Shared MAA email template, rebuilt to mirror the markup of a real
+// Microsoft PIM notification (exported to email/email.htm.html). Outlook
+// renders mail with the Word engine, which ignores div max-width and
+// anchor padding — so the layout must be a full HTML document of nested
+// tables, and the black button an <a> padded via a solid black border
+// inside a black table cell, exactly as Microsoft's own template does it.
+// `rows` is [label, htmlValue] pairs (pass values pre-escaped); empty
+// values are skipped. `intro` and `footer` accept HTML.
+function buildMaaEmailHtml({ tenantLine, heading, intro, button, rows, footer }) {
+  const font = "'Segoe UI',Tahoma,Arial,sans-serif";
+  const fontSemi = "'Segoe UI Semibold','Segoe UI',Tahoma,Arial,sans-serif";
+  const rowHtml = (rows || []).filter(r => r && r[1]).map(([k, v]) => `
+          <tr>
+            <td valign="top" style="padding:5px; border-bottom:1px solid #DEDEDE; font-family:${font}; font-size:16px; line-height:20px; color:#11100F; white-space:nowrap;">${esc(k)}</td>
+            <td valign="top" style="padding:5px; border-bottom:1px solid #DEDEDE; font-family:${font}; font-size:16px; line-height:20px; color:#11100F;">${v}</td>
+          </tr>`).join('');
+  const section = (inner, pad) => `
+      <tr><td style="padding:${pad || '12px 24px'};">${inner}</td></tr>`;
+  return `<!DOCTYPE html>
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head>
+<body bgcolor="#ffffff" style="margin:0; padding:0; background:#ffffff; word-wrap:break-word;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse; background:#ffffff;">
+  <tr><td align="center" style="padding:0;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="640" style="width:640px; border-collapse:collapse; background:#ffffff;">
+${section(`<span style="font-family:${font}; font-size:16px; line-height:22px; color:#11100F;">${esc(tenantLine)}</span>`, '24px 24px 12px')}
+${section(`<h1 style="margin:0; font-family:${fontSemi}; font-size:28px; line-height:36px; font-weight:600; letter-spacing:-0.13px; color:#11100F;">${esc(heading)}</h1>`)}
+${section(`<span style="font-family:${font}; font-size:16px; line-height:22px; color:#11100F;">${intro}</span>`)}
+${button ? section(`
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+          <tr><td align="center" bgcolor="#000000" style="background:#000000; border-radius:2px;">
+            <a href="${button.url}" style="display:inline-block; font-family:${fontSemi}; font-size:16px; font-weight:600; line-height:20px; color:#ffffff; background:#000000; border:8px solid #000000; text-decoration:none;">${esc(button.text)} &gt;</a>
+          </td></tr>
+        </table>`) : ''}
+${section(`
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+          <tr>
+            <td valign="top" style="padding:5px; border-bottom:2px solid #C9C9C9; font-family:${fontSemi}; font-size:16px; line-height:20px; font-weight:600; color:#11100F;">Settings</td>
+            <td valign="top" style="padding:5px; border-bottom:2px solid #C9C9C9; font-family:${fontSemi}; font-size:16px; line-height:20px; font-weight:600; color:#11100F;">Value</td>
+          </tr>${rowHtml}
+        </table>`)}
+    </table>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="640" style="width:640px; border-collapse:collapse; background:#F0F0F0;">
+      <tr><td style="padding:16px 24px; font-family:${font}; font-size:12px; line-height:16px; color:#484644;">${footer || 'Sent automatically by THE Intune Dashboard.'}</td></tr>
+    </table>
+  </td></tr>
+</table>
+</body></html>`;
+}
+
+// Microsoft Graph /me/sendMail returns 202 with empty body — use direct fetch
+// since graphPost calls .json() and would throw on the empty response.
+async function sendMaaMail({ subject, html, recipients, token }) {
+  const res = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: {
+        subject,
+        body: { contentType: 'HTML', content: html },
+        toRecipients: recipients.map(addr => ({ emailAddress: { address: addr } }))
+      },
+      saveToSentItems: true
+    })
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error('sendMail ' + res.status + ': ' + body);
+  }
+}
+
+// test: true sends a clearly-marked test message through the identical path
+// (same scope, same endpoint) so the mail pipeline can be verified from
+// Settings without submitting a real MAA delete.
+async function sendApprovalNotification({ app, approvalCode, justification, approvers, customer, requester, test = false }) {
+  const token = await ensureScopeToken('Mail.Send');
+  const html = buildMaaEmailHtml({
+    tenantLine: 'Microsoft Intune · Multi Admin Approval' + (customer ? ' · ' + customer.code : ''),
+    heading: test
+      ? 'Approver notifications are working'
+      : `${requester.name} requested approval to delete an app`,
+    intro: test
+      ? `This is a <strong>test message</strong> sent from THE Intune Dashboard (Settings → Customers) to verify the approver notification path. <strong>No delete request was submitted.</strong> Real notifications look like this, with the app name, approval code and justification filled in.`
+      : `An Intune admin has submitted a request to delete <strong>${esc(app.displayName || '(no name)')}</strong>. This tenant has multi-admin approval enabled — a second admin must approve the request before Intune executes the delete.`,
+    button: test ? null : { text: 'Review request', url: MAA_BLADE_URL },
+    rows: [
+      ['Requester', `${esc(requester.name)} &lt;${esc(requester.email)}&gt;`],
+      ['Customer', customer ? esc(customer.code) : '(no customer matched the signed-in account)'],
+      ['App', esc(app.displayName || '(no name)')],
+      ['Publisher', app.publisher ? esc(app.publisher) : ''],
+      ['App ID', `<span style="font-family:ui-monospace,Consolas,monospace; font-size:12px;">${esc(app.id)}</span>`],
+      ['Approval code', approvalCode ? `<span style="font-family:ui-monospace,Consolas,monospace; font-size:12px;">${esc(approvalCode)}</span>` : ''],
+      ['Submitted', esc(new Date().toUTCString())],
+      ['Justification', justification ? `<span style="white-space:pre-wrap;">${esc(justification)}</span>` : ''],
+    ],
+    footer: test
+      ? 'Nothing to approve — this was only a connectivity test. If you received it, the notification path works.'
+      : `Sent automatically by THE Intune Dashboard at the moment the delete was submitted. Reply directly to this email to reach the requester. The button opens Tenant administration → Multi Admin Approval → Received requests; if it doesn't work, copy this link: <a href="${MAA_BLADE_URL}" style="color:#666; word-break:break-all;">${MAA_BLADE_URL}</a>`
+  });
+  await sendMaaMail({
+    subject: test
+      ? '[Intune MAA] Test — approver notifications are working'
+      : `[Intune MAA] App delete needs approval: ${app.displayName || app.id}`,
+    html,
+    recipients: approvers,
+    token
+  });
+}
+
+// Notify the requestor that their request was approved. Intune itself sends
+// no notification, and approval alone does nothing — the requestor must come
+// back and press Complete. Only fires for approvals made in the dashboard
+// (portal approvals are invisible to us). `reqs` all belong to one requestor.
+async function sendRequestorApprovedEmail(reqs, approverNote) {
+  const to = reqs[0]?.requestor?.user?.Upn;
+  if (!to || !/@/.test(to)) return;
+  const token = await ensureScopeToken('Mail.Send');
+  const account = msalApp && msalApp.getActiveAccount();
+  const approverName = account?.name || account?.username || 'An approver';
+  const dashboardUrl = location.origin + location.pathname;
+  const names = reqs.map(r => r.payloadName || r.id);
+  const html = buildMaaEmailHtml({
+    tenantLine: 'Microsoft Intune · Multi Admin Approval',
+    heading: reqs.length === 1
+      ? `${approverName} approved your request: ${names[0]}`
+      : `${approverName} approved ${reqs.length} of your requests`,
+    intro: `Approval alone does not execute the change — as the requestor, you must now <strong>complete</strong> the request${reqs.length === 1 ? '' : 's'}. Open the Approvals tab in the dashboard and press Complete, or use Intune → Tenant administration → Multi Admin Approval → My requests. Requests not completed within 3 days of approval expire and must be resubmitted.`,
+    button: { text: reqs.length === 1 ? 'Complete request' : 'Complete requests', url: dashboardUrl },
+    rows: [
+      [reqs.length === 1 ? 'Request' : 'Requests', names.map(esc).join('<br>')],
+      ['Type', esc([...new Set(reqs.flatMap(r => r.requiredOperationApprovalPolicyTypes || []))].join(', ') || '—')],
+      ['Approved by', `${esc(approverName)}${account?.username ? `<br><span style="color:#888; font-size:12px;">${esc(account.username)}</span>` : ''}`],
+      ['Approver notes', approverNote ? `<span style="white-space:pre-wrap;">${esc(approverNote)}</span>` : ''],
+      ['Approved', esc(new Date().toUTCString())],
+      ['Request ID', `<span style="font-family:ui-monospace,Consolas,monospace; font-size:12px;">${reqs.map(r => esc(r.id)).join('<br>')}</span>`],
+    ],
+    footer: 'Sent automatically by THE Intune Dashboard at the moment your request was approved. Reply directly to this email to reach the approver.'
+  });
+  await sendMaaMail({
+    subject: `[Intune MAA] Approved — action required: ${reqs.length === 1 ? names[0] : reqs.length + ' requests'}`,
+    html,
+    recipients: [to],
+    token
+  });
+  logMailAttempt({ kind: 'maa-approved', approvers: [to], result: 'sent' });
+}
+
+// Map raw Graph/MSAL send errors to actionable guidance. Returns null when
+// the raw error is the best available story.
+function friendlyMailError(raw) {
+  if (/MailboxNotEnabledForRESTAPI|MailboxNotHostedInExchangeOnline|REST API is not yet supported/i.test(raw))
+    return 'The signed-in account has no Exchange Online mailbox. MAA emails send from your own mailbox, so the account you sign in with needs an Exchange Online license.';
+  if (/popup_window_error|monitor_window_timeout|user_cancelled/i.test(raw))
+    return 'The Mail.Send consent popup was blocked or closed. Allow popups for this site and retry — consent is only needed once.';
+  if (/Consent for Mail\.Send|consent_required|AADSTS65001/i.test(raw))
+    return 'Mail.Send consent was not granted — this tenant may require admin consent for the permission.';
+  if (/ErrorAccessDenied/i.test(raw))
+    return 'Exchange rejected the send (ErrorAccessDenied) — check the mailbox\'s send permissions and OWA policy.';
+  return null;
+}
+
+// Small localStorage audit trail so "the email never arrived" reports are
+// diagnosable after the fact. Rendered under Settings → Customers.
+const MAIL_LOG_KEY = 'maaMailLog';
+function loadMailLog() {
+  try { return JSON.parse(localStorage.getItem(MAIL_LOG_KEY) || '[]'); } catch (_) { return []; }
+}
+function logMailAttempt(entry) {
+  try {
+    const all = loadMailLog();
+    all.unshift({ at: new Date().toISOString(), ...entry });
+    localStorage.setItem(MAIL_LOG_KEY, JSON.stringify(all.slice(0, 10)));
+  } catch (_) { /* quota/parse issues must never block the submit flow */ }
+}
+function renderMailLog() {
+  const box = $('mailLogBox');
+  if (!box) return;
+  const log = loadMailLog();
+  if (!log.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `
+    <div style="font-weight:600; font-size:12px; margin:12px 0 4px;">✉ Approver notification attempts (last ${log.length})</div>
+    <div style="border:1px solid var(--line); border-radius:8px; background:var(--row-hover); font-size:11px;">
+      ${log.map((l, i) => `
+        <div style="padding:6px 12px; ${i < log.length - 1 ? 'border-bottom:1px solid var(--line);' : ''} display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;">
+          <span class="date" style="white-space:nowrap;">${esc(new Date(l.at).toLocaleString())}</span>
+          <span style="font-weight:600;">${l.kind === 'test' ? 'TEST' : 'MAA'}</span>
+          <span>${esc(l.customer || '—')}</span>
+          <span style="flex:1; color:var(--ink-2); min-width:180px;">→ ${esc((l.approvers || []).join(', '))}</span>
+          ${l.result === 'sent'
+            ? '<span style="color:#1f5d33; font-weight:600;">✓ sent</span>'
+            : `<span style="color:#8a2020; font-weight:600;">✗ ${esc((friendlyMailError(l.error || '') || l.error || 'failed').slice(0, 200))}</span>`}
+        </div>`).join('')}
+    </div>`;
+}
+
+function showIntuneError(msg) {
+  $('intuneError').innerHTML = `<div class="error-banner">${esc(msg)}</div>`;
+  document.dispatchEvent(new CustomEvent('brays-error', { detail: String(msg) }));
+}
+function clearIntuneError() { $('intuneError').innerHTML = ''; }
+
+function showIntuneNotice(msg) {
+  $('intuneNotice').innerHTML = `<div class="notice-banner">${esc(msg)}</div>`;
+}
+function clearIntuneNotice() { $('intuneNotice').innerHTML = ''; }
+
+// ============================================================
+// Required Apps subtab (under Intune)
+// Win32 Required → All Devices / All Users, with install context.
+// ============================================================
+let requiredLoaded = false;
+let requiredApps = [];
+
+$('btnReloadRequired').addEventListener('click', loadRequiredApps);
+$('requiredFilter').addEventListener('input', renderRequiredList);
+$('requiredTargetFilter').addEventListener('change', renderRequiredList);
+$('requiredContextFilter').addEventListener('change', renderRequiredList);
+
+async function loadRequiredApps() {
+  requiredLoaded = true;
+  clearRequiredError();
+  $('requiredList').innerHTML = '<div class="loading">Loading required apps…</div>';
+  try {
+    // Do NOT $select installExperience — Graph rejects it on base mobileApp
+    // ("Could not find a property named 'installExperience'"). Filter to
+    // win32LobApp and return full derived objects; runAsAccount is present there.
+    const filter = "(isof('microsoft.graph.win32LobApp')) and (isAssigned eq true)";
+    const all = await graphGetAll(
+      'beta/deviceAppManagement/mobileApps?$filter=' + encodeURIComponent(filter)
+        + '&$expand=assignments',
+      { onPage: (n) => { $('requiredList').innerHTML = `<div class="loading">Loading required apps… ${n}</div>`; } }
+    );
+    const rows = [];
+    for (const app of all) {
+      if (!app.displayName || /^update for/i.test(app.displayName)) continue;
+      const targets = new Set();
+      for (const a of (app.assignments || [])) {
+        if (a.intent !== 'required') continue;
+        const t = a.target && a.target['@odata.type'];
+        if (t === '#microsoft.graph.allDevicesAssignmentTarget') targets.add('allDevices');
+        else if (t === '#microsoft.graph.allLicensedUsersAssignmentTarget') targets.add('allUsers');
+      }
+      if (!targets.size) continue;
+      rows.push({
+        id: app.id,
+        name: app.displayName,
+        publisher: app.publisher || '',
+        platform: platformFromOdataType(app['@odata.type'] || '#microsoft.graph.win32LobApp'),
+        runAs: runAsFromApp(app),
+        targets
+      });
+    }
+    requiredApps = rows.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    renderRequiredList();
+  } catch (e) {
+    requiredLoaded = false;
+    console.error(e);
+    showRequiredError('Failed to load required apps: ' + (e.message || e));
+    $('requiredList').innerHTML = '';
+  }
+}
+
+function renderRequiredList() {
+  const q = ($('requiredFilter').value || '').trim().toLowerCase();
+  const target = $('requiredTargetFilter').value;
+  const ctx = $('requiredContextFilter').value;
+  let filtered = requiredApps;
+  if (target) filtered = filtered.filter(a => a.targets.has(target));
+  if (ctx === 'system' || ctx === 'user') filtered = filtered.filter(a => a.runAs === ctx);
+  if (q) {
+    filtered = filtered.filter(a =>
+      a.name.toLowerCase().includes(q) || (a.publisher || '').toLowerCase().includes(q)
+    );
+  }
+  $('requiredCount').textContent = filtered.length;
+  if (!filtered.length) {
+    $('requiredList').innerHTML = '<div class="loading" style="padding:24px;">No required apps found.</div>';
+    return;
+  }
+  $('requiredList').innerHTML = appAssignmentTableHtml(filtered, 'required');
+}
+
+function showRequiredError(msg) {
+  $('requiredError').innerHTML = `<div class="error-banner">${esc(msg)}</div>`;
+}
+function clearRequiredError() { $('requiredError').innerHTML = ''; }
+
+
+// ============================================================
+// Uninstall Apps subtab (under Intune)
+// ============================================================
+let uninstallLoaded = false;
+let uninstallApps = [];
+
+$('btnReloadUninstall').addEventListener('click', loadUninstallApps);
+$('uninstallFilter').addEventListener('input', renderUninstallList);
+$('uninstallPlatformFilter').addEventListener('change', renderUninstallList);
+$('uninstallContextFilter').addEventListener('change', renderUninstallList);
+
+async function loadUninstallApps() {
+  uninstallLoaded = true;
+  clearUninstallError();
+  $('uninstallList').innerHTML = '<div class="loading">Loading uninstall apps…</div>';
+  try {
+    // No $select for installExperience (not on base mobileApp). Full list + expand;
+    // Win32 items still carry installExperience on the derived type payload.
+    const all = await graphGetAll(
+      'beta/deviceAppManagement/mobileApps?$expand=assignments',
+      { onPage: (n) => { $('uninstallList').innerHTML = `<div class="loading">Loading uninstall apps… ${n}</div>`; } }
+    );
+    const rows = [];
+    for (const app of all) {
+      if (!app.displayName) continue;
+      let groupUninstalls = 0;
+      for (const a of (app.assignments || [])) {
+        if (a.intent === 'uninstall' &&
+            a.target && a.target['@odata.type'] === '#microsoft.graph.groupAssignmentTarget') {
+          groupUninstalls++;
+        }
+      }
+      if (!groupUninstalls) continue;
+      rows.push({
+        id: app.id,
+        name: app.displayName,
+        publisher: app.publisher || '',
+        platform: platformFromOdataType(app['@odata.type']),
+        runAs: runAsFromApp(app),
+        targets: new Set(['group']),
+        groupCount: groupUninstalls
+      });
+    }
+    uninstallApps = rows.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    populateUninstallPlatformOptions();
+    renderUninstallList();
+  } catch (e) {
+    uninstallLoaded = false;
+    console.error(e);
+    showUninstallError('Failed to load uninstall apps: ' + (e.message || e));
+    $('uninstallList').innerHTML = '';
+  }
+}
+
+function populateUninstallPlatformOptions() {
+  const plats = [...new Set(uninstallApps.map(a => a.platform).filter(Boolean))].sort();
+  $('uninstallPlatformFilter').innerHTML = '<option value="">All</option>' +
+    plats.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+  if (plats.includes('Windows')) $('uninstallPlatformFilter').value = 'Windows';
+}
+
+function renderUninstallList() {
+  const q = ($('uninstallFilter').value || '').trim().toLowerCase();
+  const platF = $('uninstallPlatformFilter').value;
+  const ctx = $('uninstallContextFilter').value;
+  const filtered = uninstallApps.filter(a => {
+    if (platF && a.platform !== platF) return false;
+    if (ctx === 'system' || ctx === 'user') { if (a.runAs !== ctx) return false; }
+    else if (ctx === 'unknown') { if (a.runAs) return false; }
+    if (q && !(a.name.toLowerCase().includes(q) || (a.publisher || '').toLowerCase().includes(q))) return false;
+    return true;
+  });
+  $('uninstallCount').textContent = filtered.length;
+  if (!filtered.length) {
+    const msg = uninstallApps.length === 0
+      ? 'No applications currently assigned for uninstall.'
+      : 'No uninstall apps found.';
+    $('uninstallList').innerHTML = `<div class="loading" style="padding:24px;">${msg}</div>`;
+    return;
+  }
+  $('uninstallList').innerHTML = appAssignmentTableHtml(filtered, 'uninstall');
+}
+
+function showUninstallError(msg) {
+  $('uninstallError').innerHTML = `<div class="error-banner">${esc(msg)}</div>`;
+}
+function clearUninstallError() { $('uninstallError').innerHTML = ''; }
+
+
+// --- App list: apps with install failures (matches Intune portal "Apps install status" view) ---
+// ============================================================
+// Shared Patch My PC (PMPC) detection
+// PMPC-created apps have notes starting with "PmpAppId". The
+// Installed sub-tab's mobileApps fetch returns notes by default;
+// the Failed sub-tab uses a report endpoint that doesn't return
+// notes, so it needs a separate lightweight fetch. Either path
+// populates the same shared Set.
+// ============================================================
+let pmpcAppIds = new Set();
+let pmpcAppIdsLoaded = false;
+let pmpcAppIdsPromise = null;
+
+function isPmpcApp(app) {
+  return (app && (app.notes || '')).startsWith('PmpAppId');
+}
+
+function populatePmpcFromMobileApps(apps) {
+  for (const a of apps) {
+    if (isPmpcApp(a)) pmpcAppIds.add(a.id);
+  }
+  pmpcAppIdsLoaded = true;
+}
+
+function ensurePmpcAppIdsLoaded() {
+  if (pmpcAppIdsLoaded) return Promise.resolve();
+  if (pmpcAppIdsPromise) return pmpcAppIdsPromise;
+  pmpcAppIdsPromise = (async () => {
+    try {
+      const apps = await graphGetAll('beta/deviceAppManagement/mobileApps?$select=id,notes');
+      populatePmpcFromMobileApps(apps);
+    } catch (e) {
+      console.warn('Failed to load PMPC app IDs:', e.message || e);
+    } finally {
+      pmpcAppIdsPromise = null;
+    }
+  })();
+  return pmpcAppIdsPromise;
+}
+
+async function loadApps() {
+  failedAppsLoaded = true;
+  clearIntuneError();
+  $('appList').innerHTML = '<div class="loading">Loading apps with failures…</div>';
+  try {
+    const body = {
+      top: 50,
+      skip: 0,
+      filter: "(FailedDeviceCount gt '0')",
+      orderBy: ['FailedDeviceCount desc'],
+      search: '',
+      select: ['DisplayName', 'Publisher', 'Platform', 'AppVersion',
+               'FailedDevicePercentage', 'FailedDeviceCount', 'ApplicationId']
+    };
+    const [data] = await Promise.all([
+      graphPost('beta/deviceManagement/reports/getAppsInstallSummaryReport', body),
+      ensurePmpcAppIdsLoaded()
+    ]);
+    const rows = parseReport(data);
+
+    // Normalize to the shape the rest of the UI expects (id, displayName, publisher)
+    intuneApps = rows
+      .filter(r => r.DisplayName && !/^update for/i.test(r.DisplayName))
+      .map(r => ({
+      id: r.ApplicationId,
+      displayName: r.DisplayName,
+      publisher: r.Publisher,
+      platform: r.Platform,
+      failedDeviceCount: r.FailedDeviceCount
+    }));
+
+    intuneAppsFiltered = intuneApps;
+    populateAppPlatformOptions();
+    applyAppFilter();
+  } catch (e) {
+    showIntuneError(e.message);
+    $('appList').innerHTML = '';
+  }
+}
+
+function populateAppPlatformOptions() {
+  const plats = [...new Set(intuneApps.map(a => platformLabel(a.platform)).filter(p => p && p !== '—'))].sort();
+  $('appPlatformFilter').innerHTML = '<option value="">All</option>' +
+    plats.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+  if (plats.includes('Windows')) $('appPlatformFilter').value = 'Windows';
+}
+
+function applyAppFilter() {
+  const q = $('appFilter').value.toLowerCase();
+  const platF = $('appPlatformFilter').value;
+  const includePmpc = $('includePmpcFailed').checked;
+  intuneAppsFiltered = intuneApps.filter(a => {
+    if (!includePmpc && pmpcAppIds.has(a.id)) return false;
+    if (platF && platformLabel(a.platform) !== platF) return false;
+    if (q && !(
+      (a.displayName || '').toLowerCase().includes(q) ||
+      (a.publisher || '').toLowerCase().includes(q)
+    )) return false;
+    return true;
+  });
+  renderAppList();
+}
+
+function platformLabel(p) {
+  if (!p) return '—';
+  const s = String(p).toLowerCase();
+  if (s.includes('windows')) return 'Windows';
+  if (s.includes('mac') || s.includes('osx') || s === 'macos') return 'macOS';
+  if (s.includes('ios')) return 'iOS';
+  if (s.includes('android')) return 'Android';
+  return p;
+}
+
+function renderAppList() {
+  if (!intuneAppsFiltered.length) {
+    $('appList').innerHTML = '<div class="loading">No apps with failed installs found.</div>';
+    return;
+  }
+  $('appList').innerHTML = intuneAppsFiltered.map(a => {
+    const plat = platformLabel(a.platform);
+    const meta = [esc(a.publisher) || '—', plat !== '—' ? esc(plat) : null].filter(Boolean).join(' · ');
+    return `
+    <div class="app-row" data-id="${esc(a.id)}">
+      <div style="flex:1; min-width:0;">
+        <div class="name">${esc(a.displayName)}</div>
+        <div class="meta">${meta}</div>
+      </div>
+      <div class="pub-small" style="min-width:90px; text-align:right;">${a.failedDeviceCount ?? ''} failed</div>
+      <div class="pub-small">→</div>
+    </div>`;
+  }).join('');
+}
+
+$('appList').addEventListener('click', e => {
+  const row = e.target.closest('.app-row');
+  if (!row) return;
+  const app = intuneApps.find(a => a.id === row.dataset.id);
+  if (app) selectApp(app);
+});
+
+$('appFilter').addEventListener('input', applyAppFilter);
+$('appPlatformFilter').addEventListener('change', applyAppFilter);
+$('includePmpcFailed').addEventListener('change', applyAppFilter);
+
+$('btnReloadApps').addEventListener('click', loadApps);
+
+// ============================================================
+// Failed Install — error-clustering view
+// Aggregates error codes across every failing app (one report call
+// per app, fanned out in parallel batches). Reveals systemic errors
+// like 0x80073cf9 (Store offline) that span many apps.
+// ============================================================
+let errorClusterLoaded = false;
+let errorClusterRows = [];
+let errorClusterSortKey = 'deviceCount';
+let errorClusterSortDir = 'desc';
+
+async function loadErrorCluster(force = false) {
+  if (errorClusterLoaded && !force) return;
+  const status = $('errorClusterStatus');
+  status.textContent = 'Fetching per-app install-status reports…';
+  $('errorClusterTable').style.display = 'none';
+  $('errorClusterFooter').style.display = 'none';
+  try {
+    const apps = intuneApps || [];
+    if (!apps.length) {
+      status.textContent = 'No failing apps to cluster — load the by-app view first.';
+      return;
+    }
+    const byCode = new Map(); // errorCode → { errorCode, hexErrorCode, deviceCount, apps: Map<appId,{name,count}> }
+    let done = 0;
+    let failures = 0;
+    let lastErr = null;
+    await mapPool(apps, 8, async (app) => {
+      try {
+        // Match the existing per-app drill-in body shape from selectApp() —
+        // a compound filter with InstallState was being rejected by the
+        // report API. Filter to non-zero ErrorCode client-side instead.
+        const body = {
+          select: ['DeviceName', 'UserPrincipalName', 'AppVersion', 'Platform',
+                   'AssignmentFilterIdsExist', 'AssignmentFilterIdsList', 'DeviceId',
+                   'ErrorCode', 'HexErrorCode', 'InstallState', 'InstallStateDetail',
+                   'LastModifiedDateTime', 'UserName', 'UserId'],
+          orderBy: [],
+          search: '',
+          filter: `(ApplicationId eq '${app.id}')`
+        };
+        const data = await graphPost('beta/deviceManagement/reports/retrieveDeviceAppInstallationStatusReport', body);
+        const rows = parseReport(data);
+        for (const r of rows) {
+          const state = String(r.InstallState || '').toLowerCase();
+          // Only count actual failures (failed / installFail / uninstallFail).
+          // Some tenants surface "error" or "Failed" with leading caps too.
+          if (!state.includes('fail') && state !== 'error') continue;
+          const code = String(r.ErrorCode ?? '').trim();
+          if (!code || code === '0') continue;
+          if (!byCode.has(code)) {
+            byCode.set(code, { errorCode: code, hexErrorCode: r.HexErrorCode || '', deviceCount: 0, apps: new Map() });
+          }
+          const e = byCode.get(code);
+          e.deviceCount++;
+          if (!e.hexErrorCode && r.HexErrorCode) e.hexErrorCode = r.HexErrorCode;
+          if (!e.apps.has(app.id)) e.apps.set(app.id, { name: app.displayName, count: 0 });
+          e.apps.get(app.id).count++;
+        }
+      } catch (err) {
+        failures++;
+        lastErr = err;
+        console.warn('Error cluster: failed to fetch report for app', app.displayName || app.id, err);
+      }
+      done++;
+      if (done % 3 === 0 || done === apps.length) {
+        status.textContent = `Aggregating… ${done}/${apps.length} apps scanned${failures ? ` (${failures} failed)` : ''}`;
+      }
+    });
+    errorClusterRows = [...byCode.values()].map(e => ({
+      errorCode: e.errorCode,
+      hexErrorCode: e.hexErrorCode,
+      deviceCount: e.deviceCount,
+      appCount: e.apps.size,
+      sampleApps: [...e.apps.values()].sort((a, b) => b.count - a.count).slice(0, 3).map(a => `${a.name} (${a.count})`).join(', ')
+    }));
+    errorClusterLoaded = true;
+    if (errorClusterRows.length === 0 && failures > 0) {
+      // Every app fetch failed — likely a permission or API shape issue. Surface it.
+      status.innerHTML = `<div class="error-banner">No data aggregated. ${failures}/${apps.length} per-app fetches failed.<br><span style="font-size:11px;">Last error: ${esc(lastErr?.message || String(lastErr))}</span></div>`;
+      return;
+    }
+    if (errorClusterRows.length === 0) {
+      status.textContent = `Scanned ${apps.length} failing apps but found no non-zero error codes in their device install-status reports.`;
+      return;
+    }
+    status.textContent = `Aggregated ${errorClusterRows.length} distinct error codes from ${apps.length} failing apps${failures ? ` (${failures} apps couldn't be scanned)` : ''}.`;
+    $('errorClusterTable').style.display = '';
+    $('errorClusterFooter').style.display = '';
+    renderErrorClusterTable();
+  } catch (e) {
+    console.error('Error cluster load failed', e);
+    status.innerHTML = `<div class="error-banner">Failed to aggregate error codes: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+function renderErrorClusterTable() {
+  const dir = errorClusterSortDir === 'asc' ? 1 : -1;
+  const rows = errorClusterRows.slice().sort((a, b) => {
+    const av = a[errorClusterSortKey], bv = b[errorClusterSortKey];
+    if (av < bv) return -dir;
+    if (av > bv) return dir;
+    return 0;
+  });
+  const body = $('errorClusterRows');
+  body.innerHTML = rows.length
+    ? rows.map(r => `
+        <tr>
+          <td class="err-code">${esc(r.errorCode)}</td>
+          <td class="err-code">${esc(r.hexErrorCode) || '—'}</td>
+          <td>${r.deviceCount}</td>
+          <td>${r.appCount}</td>
+          <td style="font-size:12px; color:var(--ink-2);">${esc(r.sampleApps)}</td>
+        </tr>
+      `).join('')
+    : `<tr><td colspan="5" class="empty">No errors aggregated yet.</td></tr>`;
+  $('errorClusterCount').textContent = rows.length;
+}
+
+function switchFailedView(mode) {
+  if (mode === 'errors') {
+    $('appList').style.display = 'none';
+    $('errorClusterList').style.display = '';
+    if (!errorClusterLoaded) loadErrorCluster();
+  } else {
+    $('appList').style.display = '';
+    $('errorClusterList').style.display = 'none';
+  }
+}
+
+$('failedViewMode').addEventListener('change', e => switchFailedView(e.target.value));
+
+document.querySelectorAll('#errorClusterTable th[data-esort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.esort;
+    if (errorClusterSortKey === key) errorClusterSortDir = errorClusterSortDir === 'asc' ? 'desc' : 'asc';
+    else { errorClusterSortKey = key; errorClusterSortDir = key.endsWith('Count') ? 'desc' : 'asc'; }
+    renderErrorClusterTable();
+  });
+});
+
+function selectApp(app) {
+  selectedApp = app;
+  $('appPicker').style.display = 'none';
+  $('failedView').style.display = '';
+  $('selAppName').textContent = app.displayName;
+  const plat = platformLabel(app.platform);
+  $('selAppMeta').textContent = [app.publisher || '—', plat !== '—' ? plat : null].filter(Boolean).join(' · ');
+  loadFailed();
+}
+
+$('btnChangeApp').addEventListener('click', () => {
+  selectedApp = null;
+  failedRows = [];
+  $('appPicker').style.display = '';
+  $('failedView').style.display = 'none';
+});
+
+$('btnRefresh').addEventListener('click', () => selectedApp && loadFailed());
+
+// --- Failed installs: exact endpoint + body shape from Intune portal network trace ---
+async function loadFailed() {
+  clearIntuneError();
+  $('failedRows').innerHTML = '<tr><td colspan="9" class="loading">Loading report…</td></tr>';
+  try {
+    const body = {
+      top: 50,
+      skip: 0,
+      select: ['AppInstallState', 'AppInstallStateDetails', 'ApplicationId', 'AppVersion',
+               'AssignmentFilterIdsExist', 'AssignmentFilterIdsList', 'DeviceId', 'DeviceName',
+               'ErrorCode', 'HexErrorCode', 'InstallState', 'InstallStateDetail',
+               'LastModifiedDateTime', 'Platform', 'UserName', 'UserId', 'UserPrincipalName'],
+      orderBy: [],
+      search: '',
+      filter: `(ApplicationId eq '${selectedApp.id}')`
+    };
+    const data = await graphPost('beta/deviceManagement/reports/retrieveDeviceAppInstallationStatusReport', body);
+    failedRows = parseReport(data);
+    // The report is per device+user session; whether "one Installed row means
+    // the app is on the machine" depends on the app's install context. Fetch it
+    // (win32 apps carry installExperience.runAsAccount) — a miss keeps null.
+    fiRunAsAccount = null;
+    try {
+      const appDetail = await graphGet('beta/deviceAppManagement/mobileApps/' + encodeURIComponent(selectedApp.id));
+      fiRunAsAccount = runAsFromApp(appDetail);
+    } catch (_) { /* non-blocking — grouped view still works, just labelled as assumed */ }
+    fiGrouped = fiRunAsAccount !== 'user'; // system + unknown → device-scoped verdicts
+    // Align header meta with Required/Installed pickers (publisher · platform · SYSTEM|USER).
+    if (selectedApp) {
+      const plat = platformLabel(selectedApp.platform);
+      const bits = [selectedApp.publisher || '—', plat !== '—' ? plat : null];
+      if (fiRunAsAccount === 'system') bits.push('SYSTEM');
+      else if (fiRunAsAccount === 'user') bits.push('USER');
+      $('selAppMeta').textContent = bits.filter(Boolean).join(' · ');
+    }
+    fiExpanded.clear();
+    renderFailedKPIs();
+    renderFailed();
+  } catch (e) {
+    failedAppsLoaded = false; // retry on next visit
+    showIntuneError(e.message);
+    $('failedRows').innerHTML = '';
+    $('failedCount').textContent = '0';
+  }
+}
+
+// Report response shape: { Schema: [{Column, PropertyType}], Values: [[v1, v2, ...]], TotalRowCount }
+function parseReport(data) {
+  const schema = (data.Schema || []).map(s => s.Column);
+  return (data.Values || []).map(row => {
+    const obj = {};
+    schema.forEach((col, i) => obj[col] = row[i]);
+    return obj;
+  });
+}
+
+// --- Per-user-session status semantics --------------------------------------
+// Intune's report emits one row per device+user pair (every user who signs in
+// gets a status record). For a SYSTEM-context app the install is per-machine,
+// so a single Installed session means the app IS on the device and remaining
+// failure rows are session noise. Report InstallState enum: 1 Installed,
+// 2 Failed, 3 Not installed, 4 Not applicable, 5 Pending.
+let fiRunAsAccount = null;    // 'system' | 'user' | null — from installExperience
+let fiGrouped = true;         // grouped device view (default; user-context apps go flat)
+const fiExpanded = new Set(); // device keys expanded to show per-session rows
+
+const FI_STATE_LABELS = { 1: 'Installed', 2: 'Failed', 3: 'Not installed', 4: 'Not applicable', 5: 'Pending' };
+function fiIsInstalled(r) { return Number(r.InstallState) === 1; }
+function fiIsFailed(r) { return Number(r.InstallState) === 2 || (r.ErrorCode && String(r.ErrorCode) !== '0'); }
+function fiStateLabel(r) { return FI_STATE_LABELS[Number(r.InstallState)] || r.AppInstallState || String(r.InstallState ?? '—'); }
+function fiStateBadge(r) {
+  const c = fiIsInstalled(r) ? { bg: '#e7f6ec', bd: '#a7d7b5', fg: '#1f5d33' }
+    : fiIsFailed(r) ? { bg: '#fdecec', bd: '#f5b5b5', fg: '#8a2020' }
+    : { bg: '#fff8e6', bd: '#f0d090', fg: '#704500' };
+  return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:${c.bg}; border:1px solid ${c.bd}; color:${c.fg};">${esc(fiStateLabel(r))}</span>`;
+}
+
+// Fold session rows into one entry per device with an operational verdict.
+function fiGroupDevices(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    const key = r.DeviceId || r.DeviceName || '—';
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(r);
+  }
+  return [...map.values()].map(list => {
+    list.sort((a, b) => (b.LastModifiedDateTime || '').localeCompare(a.LastModifiedDateTime || ''));
+    const installed = list.filter(fiIsInstalled).length;
+    const failed = list.filter(fiIsFailed).length;
+    const verdict = installed ? (failed ? 'installedNoise' : 'installed') : (failed ? 'failing' : 'other');
+    return { key: list[0].DeviceId || list[0].DeviceName || '—', rows: list, installed, failed, verdict, latest: list[0] };
+  });
+}
+
+const FI_VERDICTS = {
+  installed:      { label: '🟢 Installed on device', bg: '#e7f6ec', bd: '#a7d7b5', fg: '#1f5d33', rank: 2 },
+  installedNoise: { label: '🟢 Installed on device', bg: '#e7f6ec', bd: '#a7d7b5', fg: '#1f5d33', rank: 1 },
+  failing:        { label: '🔴 Failing', bg: '#fdecec', bd: '#f5b5b5', fg: '#8a2020', rank: 0 },
+  other:          { label: '🟡 No definitive state', bg: '#fff8e6', bd: '#f0d090', fg: '#704500', rank: 3 }
+};
+function fiVerdictBadge(g) {
+  const v = FI_VERDICTS[g.verdict];
+  const suffix = g.verdict === 'installedNoise' ? ` <span style="font-weight:400;">· ${g.failed} stale failure${g.failed === 1 ? '' : 's'}</span>` : '';
+  return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:${v.bg}; border:1px solid ${v.bd}; color:${v.fg};">${v.label}${suffix}</span>`;
+}
+
+function renderFailedKPIs() {
+  const groups = fiGroupDevices(failedRows);
+  $('kFailed').textContent = groups.filter(g => g.verdict === 'failing').length;
+  $('kNoise').textContent = groups.filter(g => g.verdict === 'installedNoise').length;
+  $('kErrCodes').textContent = new Set(failedRows.filter(fiIsFailed).map(r => r.ErrorCode).filter(Boolean)).size;
+  $('kUsers').textContent = new Set(failedRows.filter(fiIsFailed).map(r => r.UserPrincipalName).filter(Boolean)).size;
+}
+
+function renderFailed() {
+  const q = $('failedFilter').value.toLowerCase();
+  let filtered = failedRows.filter(r => {
+    if (!q) return true;
+    return (r.DeviceName || '').toLowerCase().includes(q)
+        || (r.UserPrincipalName || '').toLowerCase().includes(q)
+        || String(r.ErrorCode || '').includes(q)
+        || String(r.HexErrorCode || '').toLowerCase().includes(q);
+  });
+  // Stash flat rows so the AI-analyze click resolves in both view modes
+  window.__failedFiltered = filtered;
+
+  // Mode hint + toggle
+  const ctx = fiRunAsAccount === 'system'
+    ? 'This app installs in <strong>SYSTEM</strong> context'
+    : fiRunAsAccount === 'user' ? 'This app installs in <strong>user</strong> context' : 'Install context unknown — assuming device-scoped';
+  $('fiModeHint').innerHTML = fiGrouped
+    ? `Grouped by device. ${ctx}, so one Installed session means the app is on the machine — Intune records a status row for <em>every user who signs in</em>, which is why a device can show both Installed and Failed. Click ▸ for the per-session rows. <span data-fi-toggle="1" style="cursor:pointer; color:var(--accent); font-weight:600;">Show flat session rows</span>`
+    : `Flat view — one row per device + user session (Intune's native shape). ${ctx}. <span data-fi-toggle="1" style="cursor:pointer; color:var(--accent); font-weight:600;">Group by device</span>`;
+
+  const tbody = $('failedRows');
+  const errCellFor = (r) => {
+    const hasErr = r.ErrorCode && String(r.ErrorCode) !== '0';
+    // Index into the stashed array — flat mode re-sorts a copy, so indexOf
+    // must run against the same array the click handler resolves from.
+    return hasErr
+      ? `<td class="err-code err-clickable" data-row-idx="${window.__failedFiltered.indexOf(r)}" title="Click to analyze with AI">${esc(r.ErrorCode)}</td>`
+      : `<td class="err-code">${esc(r.ErrorCode) || '—'}</td>`;
+  };
+  const checkinCell = (r) => `<td style="white-space:nowrap;">${r.DeviceId ? `<span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:12px;" data-ime-checkin="${esc(r.DeviceId)}" data-ime-name="${esc(r.DeviceName || '')}" title="Force an IME required-app check-in on this device (on-demand)">⚡ Check-in</span>` : '—'}</td>`;
+
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">No devices found.</td></tr>';
+    $('failedCount').textContent = '0 devices';
+  } else if (fiGrouped) {
+    let groups = fiGroupDevices(filtered);
+    const dir = failedSortDir === 'asc' ? 1 : -1;
+    groups.sort((a, b) => {
+      let va, vb;
+      if (failedSortKey === 'InstallState') { va = FI_VERDICTS[a.verdict].rank; vb = FI_VERDICTS[b.verdict].rank; }
+      else if (failedSortKey === 'UserPrincipalName') { va = a.rows.length; vb = b.rows.length; }
+      else if (failedSortKey === 'ErrorCode') { va = a.failed; vb = b.failed; }
+      else { va = (a.latest[failedSortKey] ?? '').toString().toLowerCase(); vb = (b.latest[failedSortKey] ?? '').toString().toLowerCase(); }
+      if (va < vb) return -dir;
+      if (va > vb) return dir;
+      return (a.latest.DeviceName || '').localeCompare(b.latest.DeviceName || '');
+    });
+    tbody.innerHTML = groups.map(g => {
+      const open = fiExpanded.has(g.key);
+      const latestFail = g.rows.find(fiIsFailed);
+      const primary = `
+      <tr data-fi-device="${esc(g.key)}" style="cursor:pointer;" title="Click to ${open ? 'collapse' : 'expand'} the per-session rows">
+        <td class="app-name"><span style="display:inline-block; width:14px; color:var(--muted);">${open ? '▾' : '▸'}</span>${esc(selectedApp.displayName) || '—'}</td>
+        <td class="version">${esc(g.latest.AppVersion) || '—'}</td>
+        <td><span class="badge platform-badge">${esc(g.latest.Platform) || '—'}</span></td>
+        <td style="font-weight:600;">${esc(g.latest.DeviceName) || '—'}</td>
+        <td class="pub">${g.rows.length} session${g.rows.length === 1 ? '' : 's'} · ${g.installed}✓ ${g.failed}✗</td>
+        <td>${fiVerdictBadge(g)}</td>
+        ${latestFail ? errCellFor(latestFail) : '<td class="err-code">—</td>'}
+        <td class="date">${esc(fmtIntuneDate(g.latest.LastModifiedDateTime))}</td>
+        ${checkinCell(g.latest)}
+      </tr>`;
+      const subs = open ? g.rows.map(r => `
+      <tr style="background:var(--row-hover);">
+        <td></td>
+        <td class="version">${esc(r.AppVersion) || '—'}</td>
+        <td></td>
+        <td style="color:var(--muted); font-size:11px;">↳ session</td>
+        <td class="pub">${esc(r.UserPrincipalName) || '<em>(no user — system)</em>'}</td>
+        <td>${fiStateBadge(r)}</td>
+        ${errCellFor(r)}
+        <td class="date">${esc(fmtIntuneDate(r.LastModifiedDateTime))}</td>
+        <td></td>
+      </tr>`).join('') : '';
+      return primary + subs;
+    }).join('');
+    $('failedCount').textContent = `${groups.length} device${groups.length === 1 ? '' : 's'} · ${filtered.length} session rows`;
+  } else {
+    filtered = filtered.slice().sort((a, b) => {
+      const va = (a[failedSortKey] ?? '').toString().toLowerCase();
+      const vb = (b[failedSortKey] ?? '').toString().toLowerCase();
+      if (va < vb) return failedSortDir === 'asc' ? -1 : 1;
+      if (va > vb) return failedSortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    tbody.innerHTML = filtered.map(r => `
+      <tr>
+        <td class="app-name">${esc(selectedApp.displayName) || '—'}</td>
+        <td class="version">${esc(r.AppVersion) || '—'}</td>
+        <td><span class="badge platform-badge">${esc(r.Platform) || '—'}</span></td>
+        <td>${esc(r.DeviceName) || '—'}</td>
+        <td class="pub">${esc(r.UserPrincipalName) || '—'}</td>
+        <td>${fiStateBadge(r)}</td>
+        ${errCellFor(r)}
+        <td class="date">${esc(fmtIntuneDate(r.LastModifiedDateTime))}</td>
+        ${checkinCell(r)}
+      </tr>`).join('');
+    $('failedCount').textContent = `${filtered.length} session rows`;
+  }
+
+  document.querySelectorAll('#failedView thead th').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    const arrow = th.querySelector('.arrow');
+    if (th.dataset.sort === failedSortKey) {
+      th.classList.add(failedSortDir === 'asc' ? 'sort-asc' : 'sort-desc');
+      arrow.textContent = failedSortDir === 'asc' ? '▲' : '▼';
+    }
+  });
+}
+
+function fmtIntuneDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return '—';
+  return d.toISOString().slice(0, 16).replace('T', ' ');
+}
+
+$('failedFilter').addEventListener('input', renderFailed);
+
+// Grouped view: click a device row to expand/collapse its per-session rows.
+// Error-code and ⚡ Check-in clicks pass through to their own handlers.
+$('failedRows').addEventListener('click', e => {
+  if (e.target.closest('.err-clickable') || e.target.closest('[data-ime-checkin]')) return;
+  const tr = e.target.closest('[data-fi-device]');
+  if (!tr) return;
+  const key = tr.dataset.fiDevice;
+  if (fiExpanded.has(key)) fiExpanded.delete(key); else fiExpanded.add(key);
+  renderFailed();
+});
+$('fiModeHint').addEventListener('click', e => {
+  if (!e.target.closest('[data-fi-toggle]')) return;
+  fiGrouped = !fiGrouped;
+  renderFailed();
+});
+
+document.querySelectorAll('#failedView thead th').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.sort;
+    if (failedSortKey === key) failedSortDir = failedSortDir === 'asc' ? 'desc' : 'asc';
+    else { failedSortKey = key; failedSortDir = 'asc'; }
+    renderFailed();
+  });
+});
+
+// --- Installed devices view: same endpoint as Failed, filter client-side ---
+let installedRows = [];
+let installedSortKey = 'DeviceName';
+let installedSortDir = 'asc';
+
+// --- Installed sub-tab: full app list (no FailedDeviceCount filter) ---
+let installedAppsLoaded = false;
+let installedApps = [];
+let installedAppsFiltered = [];
+let installedAppsPage = 1;
+const INSTALLED_PAGE_SIZE = 15;
+
+async function loadInstalledApps() {
+  installedAppsLoaded = true;
+  clearIntuneError();
+  $('installedAppList').innerHTML = '<div class="loading">Loading apps…</div>';
+  try {
+    // Slim select + expand: only fields the picker/zero-install tile need.
+    // @odata.type is always returned by Graph for polymorphic collections.
+    // Slim $select for scale. Do not include installExperience — Graph 400s it on
+    // base mobileApp. SYSTEM/USER badges appear on Required (win32 full objects)
+    // and Uninstall (no $select); Installed shows them only if present.
+    const all = await graphGetAll(
+      'beta/deviceAppManagement/mobileApps?$select=id,displayName,publisher,createdDateTime,notes&$expand=assignments',
+      { onPage: (n) => { $('installedAppList').innerHTML = `<div class="loading">Loading apps… ${n} so far</div>`; } }
+    );
+
+    // PMPC detection: the mobileApps response already includes `notes` —
+    // populate the shared pmpcAppIds Set so Failed sub-tab can reuse it
+    // without a separate Graph call.
+    populatePmpcFromMobileApps(all);
+
+    installedApps = all
+      .filter(app => app.displayName
+        && !/^update for/i.test(app.displayName)
+        && (app.assignments || []).length > 0)
+      .map(app => ({
+        id: app.id,
+        displayName: app.displayName,
+        publisher: app.publisher,
+        platform: platformFromOdataType(app['@odata.type']),
+        runAs: runAsFromApp(app),
+        created: app.createdDateTime || null
+      }))
+      .sort((a, b) => a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' }));
+
+    installedAppsFiltered = installedApps;
+    populateInstalledAppPlatformOptions();
+    applyInstalledAppFilter();
+    refreshZeroInstallTile(); // async fill, doesn't block the picker
+  } catch (e) {
+    installedAppsLoaded = false; // retry on next visit
+    showIntuneError(e.message);
+    $('installedAppList').innerHTML = '';
+  }
+}
+
+// --- Zero-installs view (issue #6): assigned apps installed on no device ---
+// "Urgently needed" apps that nobody has anymore are retire candidates.
+// Install counts come from getAppsInstallSummaryReport (full paged sweep,
+// left-joined onto the picker's app list — absent from the report = 0).
+// Age guard: only apps created 30+ days ago count, so freshly published or
+// staged apps don't cry wolf.
+const ZERO_INSTALL_MIN_AGE_DAYS = 30;
+let installedZeroSet = null;     // Set<appId> | null while report loads
+let installedZeroFilter = false;
+
+async function refreshZeroInstallTile() {
+  $('installedTiles').style.display = '';
+  $('instTileTotal').textContent = installedApps.length;
+  try {
+    const counts = new Map();
+    const top = 500;
+    for (let skip = 0; skip < 10000; skip += top) {
+      const body = { top, skip, filter: '', orderBy: [], search: '', select: ['ApplicationId', 'InstalledDeviceCount'] };
+      const data = await graphPost('beta/deviceManagement/reports/getAppsInstallSummaryReport', body);
+      const rows = parseReport(data);
+      rows.forEach(r => counts.set(r.ApplicationId, Number(r.InstalledDeviceCount) || 0));
+      if (rows.length < top) break;
+    }
+    const cutoff = Date.now() - ZERO_INSTALL_MIN_AGE_DAYS * 864e5;
+    installedZeroSet = new Set(installedApps
+      .filter(a => (counts.get(a.id) || 0) === 0 && a.created && Date.parse(a.created) < cutoff)
+      .map(a => a.id));
+    const n = installedZeroSet.size;
+    $('instTileZeroVal').textContent = n;
+    $('instTileZero').classList.remove('tile-good', 'tile-watch');
+    $('instTileZero').classList.add(n === 0 ? 'tile-good' : 'tile-watch');
+  } catch (e) {
+    console.warn('Zero-install report failed', e);
+    $('instTileZeroVal').textContent = '—';
+    $('instTileZero').title = 'Install-summary report unavailable: ' + (e.message || e);
+  }
+}
+
+$('instTileZero').addEventListener('click', () => {
+  if (!installedZeroSet) return; // report still loading or failed
+  installedZeroFilter = !installedZeroFilter;
+  $('instTileZero').style.outline = installedZeroFilter ? '2px solid var(--accent)' : '';
+  applyInstalledAppFilter();
+});
+
+function populateInstalledAppPlatformOptions() {
+  const plats = [...new Set(installedApps.map(a => platformLabel(a.platform)).filter(p => p && p !== '—'))].sort();
+  $('installedAppPlatformFilter').innerHTML = '<option value="">All</option>' +
+    plats.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+  if (plats.includes('Windows')) $('installedAppPlatformFilter').value = 'Windows';
+}
+
+function applyInstalledAppFilter() {
+  const q = $('installedAppFilter').value.toLowerCase();
+  const platF = $('installedAppPlatformFilter').value;
+  const includePmpc = $('includePmpcInstalled').checked;
+  installedAppsFiltered = installedApps.filter(a => {
+    if (installedZeroFilter && installedZeroSet && !installedZeroSet.has(a.id)) return false;
+    if (!includePmpc && pmpcAppIds.has(a.id)) return false;
+    if (platF && platformLabel(a.platform) !== platF) return false;
+    if (q && !(
+      (a.displayName || '').toLowerCase().includes(q) ||
+      (a.publisher || '').toLowerCase().includes(q)
+    )) return false;
+    return true;
+  });
+  installedAppsPage = 1;
+  renderInstalledAppList();
+}
+
+function renderInstalledAppList() {
+  const total = installedAppsFiltered.length;
+  if (!total) {
+    $('installedAppList').innerHTML = '<div class="loading">No apps found.</div>';
+    $('installedAppsPager').innerHTML = '';
+    return;
+  }
+  const totalPages = Math.max(1, Math.ceil(total / INSTALLED_PAGE_SIZE));
+  if (installedAppsPage > totalPages) installedAppsPage = totalPages;
+  const start = (installedAppsPage - 1) * INSTALLED_PAGE_SIZE;
+  const slice = installedAppsFiltered.slice(start, start + INSTALLED_PAGE_SIZE);
+
+  $('installedAppList').innerHTML = slice.map(a => {
+    const plat = platformLabel(a.platform);
+    let meta = [esc(a.publisher) || '—', plat !== '—' ? esc(plat) : null].filter(Boolean).join(' · ');
+    const ctx = a.runAs ? contextBadgeHtml(a.runAs) : '';
+    if (ctx) meta += ` · ${ctx}`;
+    if (installedZeroFilter && a.created) {
+      const days = Math.floor((Date.now() - Date.parse(a.created)) / 864e5);
+      meta += ` · 0 installs · published ${days >= 60 ? Math.floor(days / 30) + ' months' : days + ' days'} ago`;
+    }
+    return `
+    <div class="app-row" data-id="${esc(a.id)}">
+      <div style="flex:1; min-width:0;">
+        <div class="name">${esc(a.displayName)}</div>
+        <div class="meta">${meta}</div>
+      </div>
+      <div class="pub-small">→</div>
+    </div>`;
+  }).join('');
+
+  renderInstalledAppsPager(totalPages, total);
+}
+
+function renderInstalledAppsPager(totalPages, total) {
+  const pager = $('installedAppsPager');
+  if (totalPages <= 1) {
+    pager.innerHTML = `<span class="pub-small">${total} app${total === 1 ? '' : 's'}</span>`;
+    return;
+  }
+  const p = installedAppsPage;
+  // Compact window: first, last, current ± 2, with ellipses
+  const pages = new Set([1, totalPages, p - 1, p, p + 1]);
+  const sorted = [...pages].filter(n => n >= 1 && n <= totalPages).sort((a, b) => a - b);
+  const parts = [];
+  parts.push(`<span class="page-btn ${p === 1 ? 'disabled' : ''}" data-page="${p - 1}">‹ Prev</span>`);
+  let prev = 0;
+  for (const n of sorted) {
+    if (n - prev > 1) parts.push(`<span class="page-ellipsis">…</span>`);
+    parts.push(`<span class="page-btn ${n === p ? 'active' : ''}" data-page="${n}">${n}</span>`);
+    prev = n;
+  }
+  parts.push(`<span class="page-btn ${p === totalPages ? 'disabled' : ''}" data-page="${p + 1}">Next ›</span>`);
+  parts.push(`<span class="page-info">${total} apps</span>`);
+  pager.innerHTML = parts.join('');
+}
+
+$('installedAppList').addEventListener('click', e => {
+  const row = e.target.closest('.app-row');
+  if (!row) return;
+  const app = installedApps.find(a => a.id === row.dataset.id);
+  if (app) selectAppInstalled(app);
+});
+
+$('installedAppFilter').addEventListener('input', applyInstalledAppFilter);
+$('installedAppPlatformFilter').addEventListener('change', applyInstalledAppFilter);
+$('includePmpcInstalled').addEventListener('change', applyInstalledAppFilter);
+$('btnReloadInstalledApps').addEventListener('click', loadInstalledApps);
+
+$('installedAppsPager').addEventListener('click', e => {
+  const btn = e.target.closest('.page-btn');
+  if (!btn || btn.classList.contains('disabled') || btn.classList.contains('active')) return;
+  const n = parseInt(btn.dataset.page, 10);
+  if (!Number.isFinite(n)) return;
+  installedAppsPage = n;
+  renderInstalledAppList();
+});
+
+function selectAppInstalled(app) {
+  selectedApp = app;
+  clearIntuneNotice();
+  $('installedAppPicker').style.display = 'none';
+  $('installedView').style.display = '';
+  const portalUrl = `https://intune.microsoft.com/#view/Microsoft_Intune_Apps/SettingsMenu/~/0/appId/${encodeURIComponent(app.id)}`;
+  $('instAppName').innerHTML = `<a href="${portalUrl}" target="_blank" rel="noopener noreferrer" style="color:inherit; text-decoration:none;" title="Open in Intune admin center">${esc(app.displayName)} ↗</a>`;
+  const bits = [app.publisher || '—', platformLabel(app.platform)];
+  if (app.runAs) bits.push(app.runAs === 'system' ? 'SYSTEM' : app.runAs === 'user' ? 'USER' : app.runAs);
+  $('instAppMeta').textContent = bits.filter(Boolean).join(' · ');
+  loadInstalledAssignments();
+  loadInstalled();
+}
+
+async function loadInstalledAssignments() {
+  const body = $('instAssignmentsBody');
+  body.innerHTML = '<div class="loading">Loading assignments…</div>';
+  try {
+    const data = await graphGet(`beta/deviceAppManagement/mobileApps/${encodeURIComponent(selectedApp.id)}?$expand=assignments`);
+    const assignments = data.assignments || [];
+    if (!assignments.length) {
+      body.innerHTML = '<div class="meta">No assignments.</div>';
+      return;
+    }
+
+    // Resolve group names in parallel; skip non-group targets (allDevices/allLicensedUsers)
+    const groupIds = [...new Set(assignments
+      .map(a => a.target && a.target.groupId)
+      .filter(Boolean))];
+    const nameById = {};
+    await Promise.all(groupIds.map(async gid => {
+      try {
+        const g = await graphGet(`beta/groups/${encodeURIComponent(gid)}?$select=displayName,id`);
+        nameById[gid] = g.displayName || gid;
+      } catch {
+        nameById[gid] = gid; // fall back to id if access denied
+      }
+    }));
+
+    body.innerHTML = assignments.map(a => {
+      const intent = (a.intent || 'unknown').toLowerCase();
+      const target = a.target || {};
+      const tType = (target['@odata.type'] || '').split('.').pop();
+      let label;
+      if (target.groupId) {
+        label = `<span class="assignment-group">${esc(nameById[target.groupId])}</span>`;
+      } else if (tType === 'allDevicesAssignmentTarget') {
+        label = `<span class="assignment-group">All Devices</span>`;
+      } else if (tType === 'allLicensedUsersAssignmentTarget') {
+        label = `<span class="assignment-group">All Users</span>`;
+      } else {
+        label = `<span class="assignment-group">${esc(tType || 'Unknown target')}</span>`;
+      }
+      const mode = tType === 'exclusionGroupAssignmentTarget' ? '(exclusion)' : '';
+      return `<div class="assignment-row">
+        <span class="assignment-intent ${esc(intent)}">${esc(intent)}</span>
+        ${label}
+        ${mode ? `<span class="assignment-mode">${esc(mode)}</span>` : ''}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    body.innerHTML = `<div class="meta">Failed to load assignments: ${esc(e.message || e)}</div>`;
+  }
+}
+
+async function loadInstalled() {
+  clearIntuneError();
+  $('installedRows').innerHTML = '<tr><td colspan="6" class="loading">Loading report…</td></tr>';
+  try {
+    const body = {
+      top: 1000, skip: 0,
+      select: ['ApplicationId', 'AppVersion', 'DeviceId', 'DeviceName',
+               'InstallState', 'LastModifiedDateTime', 'Platform',
+               'UserName', 'UserPrincipalName'],
+      orderBy: [], search: '',
+      filter: `(ApplicationId eq '${selectedApp.id}')`
+    };
+    const data = await graphPost('beta/deviceManagement/reports/retrieveDeviceAppInstallationStatusReport', body);
+    installedRows = parseReport(data);
+    populateInstalledStateOptions();
+    renderInstalled();
+  } catch (e) {
+    showIntuneError(e.message);
+    $('installedRows').innerHTML = '';
+    $('installedCount').textContent = '0';
+  }
+}
+
+function populateInstalledStateOptions() {
+  const states = [...new Set(installedRows.map(r => r.InstallState).filter(Boolean))].sort();
+  const sel = $('installedStateFilter');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">All states</option>' +
+    states.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  // Default to "installed" if present, else leave All
+  if (!current && states.some(s => /^installed/i.test(s))) {
+    const match = states.find(s => /^installed/i.test(s));
+    sel.value = match;
+  } else if (current && states.includes(current)) {
+    sel.value = current;
+  }
+}
+
+function renderInstalled() {
+  const q = $('installedFilter').value.toLowerCase();
+  const stateF = $('installedStateFilter').value;
+  let filtered = installedRows.filter(r => {
+    if (stateF && r.InstallState !== stateF) return false;
+    if (!q) return true;
+    return (r.DeviceName || '').toLowerCase().includes(q)
+        || (r.UserPrincipalName || '').toLowerCase().includes(q);
+  });
+  filtered.sort((a, b) => {
+    const va = (a[installedSortKey] ?? '').toString().toLowerCase();
+    const vb = (b[installedSortKey] ?? '').toString().toLowerCase();
+    if (va < vb) return installedSortDir === 'asc' ? -1 : 1;
+    if (va > vb) return installedSortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  const tbody = $('installedRows');
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">No devices found${installedRows.length ? ` (${installedRows.length} total, filter active)` : ''}.</td></tr>`;
+  } else {
+    tbody.innerHTML = filtered.map(r => `
+      <tr>
+        <td>${esc(r.DeviceName) || '—'}</td>
+        <td class="pub">${esc(r.UserPrincipalName) || '—'}</td>
+        <td class="version">${esc(r.AppVersion) || '—'}</td>
+        <td>${esc(r.InstallState) || '—'}</td>
+        <td><span class="badge platform-badge">${esc(r.Platform) || '—'}</span></td>
+        <td class="date">${esc(fmtIntuneDate(r.LastModifiedDateTime))}</td>
+      </tr>`).join('');
+  }
+  $('installedCount').textContent = filtered.length;
+  window.__installedFiltered = filtered;
+
+  document.querySelectorAll('#installedView thead th').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    const arrow = th.querySelector('.arrow');
+    if (th.dataset.sortInst === installedSortKey) {
+      th.classList.add(installedSortDir === 'asc' ? 'sort-asc' : 'sort-desc');
+      arrow.textContent = installedSortDir === 'asc' ? '▲' : '▼';
+    }
+  });
+}
+
+function copyInstalledNames() {
+  const rows = window.__installedFiltered || installedRows;
+  const names = rows.map(r => r.DeviceName).filter(Boolean).join('\n');
+  navigator.clipboard.writeText(names).then(() => {
+    const btn = $('btnCopyInstalled');
+    const orig = btn.textContent;
+    btn.textContent = `✓ Copied ${rows.length}`;
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  });
+}
+
+function exportInstalledCSV() {
+  const rows = window.__installedFiltered || installedRows;
+  const header = ['Device', 'User', 'Version', 'InstallState', 'Platform', 'LastModified'];
+  const lines = [header.join(',')].concat(
+    rows.map(r => [r.DeviceName, r.UserPrincipalName, r.AppVersion, r.InstallState, r.Platform, r.LastModifiedDateTime].map(escCsv).join(','))
+  );
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${(selectedApp.displayName || 'app').replace(/[^a-z0-9-_]+/gi, '_')}-installed.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+$('btnChangeAppInstalled').addEventListener('click', () => {
+  selectedApp = null;
+  installedRows = [];
+  $('installedAppPicker').style.display = '';
+  $('installedView').style.display = 'none';
+  clearIntuneNotice();
+});
+
+// ============================================================
+// Detection Rule Inspector
+// Modal showing the Win32 detection rule(s) for the selected app.
+// Triggered from the selected-app header in Installed and Failed
+// sub-tabs. Read-only — uses existing DeviceManagementApps.Read.All
+// scope and the mobileApps/{id} endpoint we already call.
+// ============================================================
+
+const WIN32_OP_LABEL = {
+  equal: '=', notEqual: '≠',
+  greaterThan: '>', greaterThanOrEqual: '≥',
+  lessThan: '<', lessThanOrEqual: '≤',
+  exists: 'exists', doesNotExist: 'does not exist',
+  notConfigured: 'not configured'
+};
+const op = v => WIN32_OP_LABEL[v] || v || '—';
+
+function decodeBase64Utf8(b64) {
+  try {
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    return new TextDecoder('utf-8').decode(bytes);
+  } catch {
+    return b64; // not base64 — return as-is
+  }
+}
+
+function formatWin32Rule(r) {
+  const t = (r['@odata.type'] || '').replace('#microsoft.graph.', '');
+  const arch = r.check32BitOn64System ? ' <span style="color:var(--muted); font-size:11px;">(32-bit on 64-bit)</span>' : '';
+
+  if (t === 'win32LobAppProductCodeRule') {
+    const verPart = r.productVersion
+      ? `<div><strong>Version:</strong> ${esc(op(r.productVersionOperator))} <code>${esc(r.productVersion)}</code></div>`
+      : '';
+    return `
+      <div style="padding:14px 16px; border:1px solid var(--line); border-radius:8px; margin-bottom:10px; line-height:1.7;">
+        <div style="font-weight:700; font-size:13px; color:var(--accent); margin-bottom:6px;">MSI Product Code</div>
+        <div><strong>Product Code:</strong> <code>${esc(r.productCode || '—')}</code></div>
+        ${verPart}
+      </div>`;
+  }
+
+  if (t === 'win32LobAppFileSystemRule') {
+    const opType = r.operationType || r.detectionType || r.operator;
+    const valuePart = r.comparisonValue
+      ? `<div><strong>Comparison:</strong> ${esc(op(r.operator))} <code>${esc(r.comparisonValue)}</code></div>`
+      : '';
+    return `
+      <div style="padding:14px 16px; border:1px solid var(--line); border-radius:8px; margin-bottom:10px; line-height:1.7;">
+        <div style="font-weight:700; font-size:13px; color:var(--accent); margin-bottom:6px;">File / Folder${arch}</div>
+        <div><strong>Path:</strong> <code>${esc(r.path || '—')}</code></div>
+        <div><strong>Item:</strong> <code>${esc(r.fileOrFolderName || '—')}</code></div>
+        <div><strong>Check:</strong> ${esc(opType || '—')}</div>
+        ${valuePart}
+      </div>`;
+  }
+
+  if (t === 'win32LobAppRegistryRule') {
+    const valuePart = r.comparisonValue
+      ? `<div><strong>Comparison:</strong> ${esc(op(r.operator))} <code>${esc(r.comparisonValue)}</code></div>`
+      : '';
+    return `
+      <div style="padding:14px 16px; border:1px solid var(--line); border-radius:8px; margin-bottom:10px; line-height:1.7;">
+        <div style="font-weight:700; font-size:13px; color:var(--accent); margin-bottom:6px;">Registry${arch}</div>
+        <div><strong>Key:</strong> <code>${esc(r.keyPath || '—')}</code></div>
+        <div><strong>Value name:</strong> <code>${esc(r.valueName || '(default)')}</code></div>
+        <div><strong>Check:</strong> ${esc(r.operationType || r.detectionType || '—')}</div>
+        ${valuePart}
+      </div>`;
+  }
+
+  if (t === 'win32LobAppPowerShellScriptRule') {
+    const script = r.scriptContent ? decodeBase64Utf8(r.scriptContent) : '(no script content returned)';
+    return `
+      <div style="padding:14px 16px; border:1px solid var(--line); border-radius:8px; margin-bottom:10px; line-height:1.7;">
+        <div style="font-weight:700; font-size:13px; color:var(--accent); margin-bottom:6px;">PowerShell Script</div>
+        <div><strong>Name:</strong> ${esc(r.displayName || '—')}</div>
+        <div><strong>Run as:</strong> ${esc(r.runAsAccount || '—')} ${r.runAs32Bit ? '(32-bit)' : ''}</div>
+        <div><strong>Signature check:</strong> ${r.enforceSignatureCheck ? 'Yes' : 'No'}</div>
+        <div style="margin-top:8px;"><strong>Script:</strong></div>
+        <pre style="background:#f5f0e8; border:1px solid var(--line); border-radius:6px; padding:12px; font-family:ui-monospace,monospace; font-size:12px; max-height:360px; overflow:auto; white-space:pre-wrap; margin:6px 0 0;">${esc(script)}</pre>
+      </div>`;
+  }
+
+  return `<div style="padding:14px 16px; border:1px solid var(--line); border-radius:8px; margin-bottom:10px; line-height:1.7;"><div style="font-weight:700; font-size:13px; color:var(--accent); margin-bottom:6px;">${esc(t)}</div><div class="meta">(unrecognized rule type)</div></div>`;
+}
+
+function renderDetectionRules(app) {
+  const t = (app['@odata.type'] || '').toLowerCase();
+
+  if (t.includes('win32lobapp')) {
+    // Prefer `rules` (current) filtered to detection; fall back to `detectionRules` (legacy)
+    let rules = (app.rules || []).filter(r => (r.ruleType || '').toLowerCase() === 'detection');
+    if (!rules.length && app.detectionRules) rules = app.detectionRules;
+    if (!rules.length) return '<div class="meta" style="padding:8px 0;">This Win32 app has no detection rules configured. Intune will treat the app as never-detected.</div>';
+    return rules.map(formatWin32Rule).join('');
+  }
+
+  if (t.includes('windowsmobilemsi') || t.includes('windowsmsi')) {
+    return `
+      <div style="padding:14px 16px; border:1px solid var(--line); border-radius:8px; margin-bottom:10px; line-height:1.7;">
+        <div style="font-weight:700; font-size:13px; color:var(--accent); margin-bottom:6px;">MSI (line-of-business)</div>
+        <div><strong>Product Code:</strong> <code>${esc(app.productCode || '—')}</code></div>
+        ${app.productVersion ? `<div><strong>Product Version:</strong> <code>${esc(app.productVersion)}</code></div>` : ''}
+        <div class="meta" style="margin-top:8px; font-size:12px;">Intune detects this app by matching the MSI ProductCode against installed MSI products on the device.</div>
+      </div>`;
+  }
+
+  if (t.includes('macoslobapp')) {
+    return `
+      <div style="padding:14px 16px; border:1px solid var(--line); border-radius:8px; margin-bottom:10px; line-height:1.7;">
+        <div style="font-weight:700; font-size:13px; color:var(--accent); margin-bottom:6px;">macOS LoB</div>
+        ${app.bundleId ? `<div><strong>Bundle ID:</strong> <code>${esc(app.bundleId)}</code></div>` : ''}
+        ${app.versionNumber ? `<div><strong>Version:</strong> <code>${esc(app.versionNumber)}</code></div>` : ''}
+        ${app.buildNumber ? `<div><strong>Build:</strong> <code>${esc(app.buildNumber)}</code></div>` : ''}
+      </div>`;
+  }
+
+  const friendlyType = t.replace('#microsoft.graph.', '');
+  return `<div class="meta" style="padding:8px 0;">Detection rules aren't exposed for this app type (<code>${esc(friendlyType)}</code>) — the platform handles detection internally (e.g. Store apps via the Microsoft Store, Office Suite via the C2R installer).</div>`;
+}
+
+async function openDetectionRulesModal(app) {
+  if (!app || !app.id) return;
+  $('detTitle').textContent = app.displayName || 'Detection rule';
+  $('detSubtitle').textContent = app.publisher || '';
+  $('detBody').innerHTML = '<div class="loading" style="padding:24px;">Loading detection rule…</div>';
+  $('detModal').classList.add('show');
+  try {
+    const full = await graphGet(`beta/deviceAppManagement/mobileApps/${encodeURIComponent(app.id)}`);
+    $('detBody').innerHTML = renderDetectionRules(full);
+  } catch (e) {
+    $('detBody').innerHTML = `<div class="error-banner">Failed to load detection rule: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+function closeDetectionRulesModal() {
+  $('detModal').classList.remove('show');
+}
+
+$('btnDetectionRulesInstalled').addEventListener('click', () => openDetectionRulesModal(selectedApp));
+$('btnDetectionRulesFailed').addEventListener('click', () => openDetectionRulesModal(selectedApp));
+$('detModal').addEventListener('click', e => { if (e.target === $('detModal')) closeDetectionRulesModal(); });
+
+// ============================================================
+// Delete app from Intune (Installed sub-tab)
+// Hard delete via DELETE /deviceAppManagement/mobileApps/{id}.
+// Requires DeviceManagementApps.ReadWrite.All. Typed-confirmation
+// modal — user must type the exact displayName before the confirm
+// button enables. Only write action in the dashboard.
+// ============================================================
+function openDeleteModal(app) {
+  if (!app) return;
+  $('delSubtitle').textContent = app.publisher || '';
+  $('delBody').innerHTML = `
+    <p style="margin-top:0;">This permanently removes the app from this Intune tenant. Existing installs on devices are not uninstalled — but Intune will no longer manage or report on them.</p>
+    <p>To confirm, type the app name exactly:</p>
+    <div style="background:var(--danger-soft); border:1px solid #f5b5b5; color:#8a2020; padding:10px 14px; border-radius:8px; font-family:ui-monospace,monospace; font-size:13px; margin-bottom:12px; word-break:break-word;">${esc(app.displayName || '')}</div>
+    <input type="text" id="delConfirmInput" class="search" placeholder="Type app name to confirm" autocomplete="off" style="width:100%; margin-bottom:16px;">
+    <p style="margin-bottom:6px;">Justification <span style="color:var(--muted); font-weight:400;">(required by tenants with multi-admin approval; recorded in the Intune audit log)</span>:</p>
+    <textarea id="delJustification" class="search" rows="3" placeholder="e.g. Retiring superseded app — replaced by v2 in package XYZ" style="width:100%; margin-bottom:16px; font-family:inherit; resize:vertical;"></textarea>
+    <div id="delError"></div>
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button class="btn btn-ghost" onclick="closeDeleteModal()">Cancel</button>
+      <button class="btn btn-danger" id="delConfirmBtn" disabled>Delete permanently</button>
+    </div>
+  `;
+  const input = $('delConfirmInput');
+  const justification = $('delJustification');
+  const btn = $('delConfirmBtn');
+  const update = () => {
+    btn.disabled = input.value !== app.displayName || justification.value.trim() === '';
+  };
+  input.addEventListener('input', update);
+  justification.addEventListener('input', update);
+  btn.addEventListener('click', () => confirmDelete(app, justification.value.trim()));
+  attachSearchClearButtons($('delBody'));
+  $('delModal').classList.add('show');
+  setTimeout(() => input.focus(), 0);
+}
+
+function closeDeleteModal() {
+  $('delModal').classList.remove('show');
+  if (activeApprovalPoll) { activeApprovalPoll.stop(); activeApprovalPoll = null; }
+}
+
+// Tracks the currently-running approval-status poll so we can stop it
+// when the modal closes or a new approval is submitted on top.
+let activeApprovalPoll = null;
+
+const APPROVAL_POLL_INTERVAL_MS = 30000;
+const APPROVAL_TERMINAL_STATES = ['approved', 'rejected', 'cancelled', 'expired', 'completed'];
+
+function pollApprovalStatus(code, onUpdate) {
+  let stopped = false;
+  let consecutiveErrors = 0;
+  async function tick() {
+    if (stopped) return;
+    try {
+      const data = await graphGet('beta/deviceManagement/operationApprovalRequests/' + encodeURIComponent(code));
+      consecutiveErrors = 0;
+      onUpdate({ kind: 'status', request: data });
+      const status = (data.status || '').toLowerCase();
+      if (APPROVAL_TERMINAL_STATES.includes(status)) {
+        stopped = true;
+        return;
+      }
+    } catch (e) {
+      consecutiveErrors++;
+      if (consecutiveErrors >= 3) onUpdate({ kind: 'error', error: e.message || String(e) });
+    }
+    if (!stopped) setTimeout(tick, APPROVAL_POLL_INTERVAL_MS);
+  }
+  // Fire once immediately so the user sees the first status without waiting 30s.
+  tick();
+  return { stop: () => { stopped = true; } };
+}
+
+function renderApprovalStatusRow(state) {
+  const row = $('delStatusRow');
+  if (!row) return;
+  if (state.kind === 'error') {
+    row.innerHTML = `<div style="font-size:12px; color:var(--muted);">⚠ Couldn't refresh status (${esc(state.error)}). Check the admin center.</div>`;
+    return;
+  }
+  const req = state.request || {};
+  const status = (req.status || '').toLowerCase();
+  const approverName = req.approver?.user?.displayName || req.approver?.application?.displayName || '';
+  const approvalJust = req.approvalJustification || '';
+  const lastMod = req.lastModifiedDateTime ? new Date(req.lastModifiedDateTime).toLocaleString() : '';
+  let html = '';
+  if (status === 'needsapproval' || status === 'pending' || status === '') {
+    html = `<div class="notice-banner" style="background:#fff8e6; border-color:#f0d090; color:#704500;">⏳ <strong>Pending approval.</strong> Polling every 30 s…</div>`;
+  } else if (status === 'approved' || status === 'completed') {
+    html = `<div class="notice-banner">✓ <strong>${esc(status === 'completed' ? 'Completed' : 'Approved')}${approverName ? ' by ' + esc(approverName) : ''}.</strong> ${status === 'completed' ? 'The delete has finished.' : 'Intune is executing the delete now.'}${approvalJust ? `<br><em>Approver note:</em> ${esc(approvalJust)}` : ''}${lastMod ? `<br><span style="font-size:11px; color:var(--ink-2);">${esc(lastMod)}</span>` : ''}</div>`;
+    // Auto-refresh the picker so the deleted app disappears.
+    if (typeof loadInstalledApps === 'function') loadInstalledApps();
+  } else if (status === 'rejected') {
+    html = `<div class="error-banner">✗ <strong>Rejected${approverName ? ' by ' + esc(approverName) : ''}.</strong>${approvalJust ? `<br><em>Reason:</em> ${esc(approvalJust)}` : ''}${lastMod ? `<br><span style="font-size:11px;">${esc(lastMod)}</span>` : ''}</div>`;
+  } else if (status === 'cancelled' || status === 'expired') {
+    html = `<div class="error-banner" style="background:#fff7e6; border-color:#f0d090; color:#704500;">⊘ <strong>${esc(status[0].toUpperCase() + status.slice(1))}.</strong>${lastMod ? `<br><span style="font-size:11px;">${esc(lastMod)}</span>` : ''}</div>`;
+  } else {
+    html = `<div style="font-size:12px; color:var(--muted);">Status: ${esc(status)}</div>`;
+  }
+  row.innerHTML = html;
+}
+
+// CORS hides the x-msft-approval-code response header from the browser,
+// but Intune embeds the value in the error body too. Pull it from the body
+// so we can show it to the user.
+function extractApprovalCode(body) {
+  if (!body) return null;
+  const m = body.match(/x-msft-approval-code["'\s:\\]+([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/);
+  return m ? m[1] : null;
+}
+
+async function confirmDelete(app, justification) {
+  const btn = $('delConfirmBtn');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Submitting…';
+  $('delError').innerHTML = '';
+  try {
+    const justB64 = btoa(String.fromCharCode(...new TextEncoder().encode(justification)));
+    await graphDelete('beta/deviceAppManagement/mobileApps/' + encodeURIComponent(app.id), {
+      headers: { 'x-msft-approval-justification': justB64 },
+      token: await ensureScopeToken('DeviceManagementApps.ReadWrite.All')
+    });
+    // Tenant without multi-admin approval — the delete completed.
+    const deletedName = app.displayName;
+    closeDeleteModal();
+    selectedApp = null;
+    installedRows = [];
+    $('installedAppPicker').style.display = '';
+    $('installedView').style.display = 'none';
+    showIntuneNotice('Deleted ' + deletedName + ' from Intune.');
+    loadInstalledApps();
+    // Keep the App versions sub-tab in sync if it's been opened — the
+    // deleted package must drop out of its sprawl counts immediately.
+    if (typeof loadAppversions === 'function' && appversionsLoaded) loadAppversions(true);
+  } catch (e) {
+    // 412 = approval request submitted; 409 + "active Approval Request" = already pending.
+    // Both mean the dashboard's job is done — an approver acts on it from the admin center.
+    const isSubmitted = e.status === 412;
+    const isAlreadyPending = e.status === 409 && /active Approval Request/i.test(e.body || '');
+    if (isSubmitted || isAlreadyPending) {
+      const code = extractApprovalCode(e.body);
+      // Auto-notify approvers if this customer has any configured. Failure must
+      // not block the success panel — the delete request is already submitted server-side.
+      const account = msalApp && msalApp.getActiveAccount();
+      const upn = (account?.username || '').toLowerCase();
+      const allCustomers = loadCustomers();
+      const customer = allCustomers.find(c => (c.email || '').toLowerCase() === upn) || null;
+      const approvers = (customer && customer.approvers) || [];
+      let notification = { status: 'none' };
+      if (approvers.length) {
+        try {
+          await sendApprovalNotification({
+            app,
+            approvalCode: code,
+            justification,
+            approvers,
+            customer,
+            requester: { name: account?.name || upn, email: upn }
+          });
+          notification = { status: 'sent', approvers };
+          logMailAttempt({ kind: 'maa', customer: customer.code, approvers, result: 'sent' });
+        } catch (mailErr) {
+          notification = { status: 'failed', approvers, error: mailErr.message || String(mailErr) };
+          logMailAttempt({ kind: 'maa', customer: customer.code, approvers, result: 'failed', error: notification.error });
+        }
+      } else if (!customer && allCustomers.some(c => (c.approvers || []).length)) {
+        // Approvers ARE configured somewhere, but the signed-in UPN didn't
+        // match any customer's login email — say so instead of the misleading
+        // "no approvers configured".
+        notification = { status: 'nomatch', upn };
+      }
+      renderApprovalSubmitted(app, code, isAlreadyPending, notification);
+      return;
+    }
+    btn.disabled = false;
+    btn.textContent = originalText;
+    $('delError').innerHTML = `<div class="error-banner">Failed to delete: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+function renderApprovalSubmitted(app, code, alreadyPending, notification) {
+  // Tear down any prior poll before starting a new one
+  if (activeApprovalPoll) { activeApprovalPoll.stop(); activeApprovalPoll = null; }
+  const heading = alreadyPending
+    ? 'An approval request is already pending for this app.'
+    : 'Approval request submitted.';
+  let notifBlock = '';
+  if (notification?.status === 'sent') {
+    notifBlock = `<div class="notice-banner" style="margin-top:16px;">✓ Notified ${esc(notification.approvers.join(', '))}.</div>`;
+  } else if (notification?.status === 'failed') {
+    const hint = friendlyMailError(notification.error || '');
+    notifBlock = `<div class="error-banner" style="background:#fff7e6; border-color:#f0d090; color:#704500; margin-top:16px;">⚠ Email notification failed: ${esc(hint || notification.error)}${hint ? `<br><span style="font-size:11px;">${esc(notification.error)}</span>` : ''}<br>Notify ${esc(notification.approvers.join(', '))} manually.</div>`;
+  } else if (notification?.status === 'nomatch') {
+    notifBlock = `<div class="error-banner" style="background:#fff7e6; border-color:#f0d090; color:#704500; margin-top:16px;">⚠ No notification sent: the signed-in account (${esc(notification.upn)}) doesn't match any customer's login email, so the dashboard couldn't pick an approver list. Fix the customer's login email in Settings → Customers, then use ✉ Send test to verify.</div>`;
+  } else {
+    notifBlock = `<p style="margin-top:16px; color:var(--muted); font-size:12px;">No approvers configured for this customer — set them in Settings → Customers to auto-notify on future submissions.</p>`;
+  }
+  $('delBody').innerHTML = `
+    <div class="notice-banner" style="margin-top:0;">
+      <strong>✓ ${esc(heading)}</strong> This tenant has multi-admin approval enabled for app deletion. The dashboard's part is done — an approver needs to take it from here.
+    </div>
+    ${code ? `
+      <p style="margin-top:16px; margin-bottom:6px;"><strong>Approval code:</strong></p>
+      <div style="background:var(--bg); border:1px solid var(--line); padding:10px 14px; border-radius:8px; font-family:ui-monospace,monospace; font-size:13px; margin-bottom:16px; user-select:all; word-break:break-all;">${esc(code)}</div>
+    ` : ''}
+    ${notifBlock}
+    <div id="delStatusRow" style="margin-top:16px;"></div>
+    <p style="margin-top:16px;">An approver opens <a href="${MAA_BLADE_URL}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); font-weight:600;">Intune admin center → Tenant administration → Multi Admin Approval → Access requests</a>, finds this request for <em>${esc(app.displayName || '')}</em>, and approves or rejects it. The dashboard polls Intune every 30 seconds — once approved, the picker auto-refreshes and the app disappears.</p>
+    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px;">
+      <button class="btn btn-danger" onclick="closeDeleteModal()">Close</button>
+    </div>
+  `;
+  // Start polling for status. Requires DeviceManagementConfiguration.Read.All
+  // (already in SCOPES). Stops on terminal state or modal close.
+  if (code) {
+    activeApprovalPoll = pollApprovalStatus(code, renderApprovalStatusRow);
+  }
+}
+
+$('btnDeleteApp').addEventListener('click', () => openDeleteModal(selectedApp));
+$('delModal').addEventListener('click', e => { if (e.target === $('delModal')) closeDeleteModal(); });
+$('btnRefreshInstalled').addEventListener('click', () => {
+  if (!selectedApp) return;
+  loadInstalledAssignments();
+  loadInstalled();
+});
+$('installedFilter').addEventListener('input', renderInstalled);
+$('installedStateFilter').addEventListener('change', renderInstalled);
+$('btnCopyInstalled').addEventListener('click', copyInstalledNames);
+$('btnExportInstalled').addEventListener('click', exportInstalledCSV);
+
+document.querySelectorAll('#installedView thead th').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.sortInst;
+    if (installedSortKey === key) installedSortDir = installedSortDir === 'asc' ? 'desc' : 'asc';
+    else { installedSortKey = key; installedSortDir = 'asc'; }
+    renderInstalled();
+  });
+});
+
+// --- Settings: API key + model ---
+const SETTINGS_KEY = 'intuneDash.claude';
+const SCALE_KEY = 'intuneDash.scale';
+const CLAUDE_DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
+const XAI_DEFAULT_MODEL = 'grok-4.3';
+const SETTINGS_REV = 2;
+const XAI_KEY_HELP = 'This needs an <strong>xAI Grok</strong> API key from <a href="https://console.x.ai" target="_blank" rel="noopener noreferrer">console.x.ai</a> (typical prefix <code>xai-</code>). Twitter/X developer keys from developer.x.com will not work.';
+function looksLikeXaiKey(key) {
+  return /^xai-/i.test(String(key || '').trim());
+}
+function looksLikeClaudeKey(key) {
+  const k = String(key || '').trim();
+  return /^sk-ant-/i.test(k) || /^sk-or-/i.test(k);
+}
+function looksLikeTwitterDevKey(key) {
+  const k = String(key || '').trim();
+  if (!k || looksLikeXaiKey(k) || looksLikeClaudeKey(k)) return false;
+  return /^AAAA/i.test(k) || k.length >= 30;
+}
+function readLlmForm() {
+  if (!$('llmProvider')) return {};
+  return {
+    provider: $('llmProvider').value === 'xai' ? 'xai' : 'claude',
+    apiKey: ($('claudeApiKey').value || '').trim(),
+    model: $('claudeModel').value,
+    xaiApiKey: ($('xaiApiKey').value || '').trim(),
+    xaiModel: $('xaiModel').value
+  };
+}
+function loadSettings() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+    const rev = Number(s.settingsRev) || 0;
+    if (s.xaiModel === 'grok-4.6' && rev < SETTINGS_REV) {
+      s.xaiModel = XAI_DEFAULT_MODEL;
+      s.settingsRev = SETTINGS_REV;
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+    }
+    if (s.provider === 'xai' || s.provider === 'claude') $('llmProvider').value = s.provider;
+    if (s.apiKey) $('claudeApiKey').value = s.apiKey;
+    if (s.model) $('claudeModel').value = s.model;
+    if (s.xaiApiKey) $('xaiApiKey').value = s.xaiApiKey;
+    if (s.xaiModel) $('xaiModel').value = s.xaiModel;
+    if (looksLikeXaiKey(s.xaiApiKey) || looksLikeXaiKey(s.apiKey) || s.provider === 'xai') {
+      $('llmProvider').value = 'xai';
+    }
+  } catch {}
+  syncAnalyzeProviderUi();
+}
+function persistLlmSettings({ announce, fromPicker } = {}) {
+  if (!$('llmProvider')) return;
+  const prev = getSettings();
+  const s = Object.assign({}, prev, readLlmForm());
+  if (!(Number(s.settingsRev) >= SETTINGS_REV)) s.settingsRev = SETTINGS_REV;
+  if (looksLikeXaiKey(s.apiKey) && !s.xaiApiKey) {
+    s.xaiApiKey = s.apiKey;
+    $('xaiApiKey').value = s.apiKey;
+  }
+  if (!fromPicker && looksLikeXaiKey(s.xaiApiKey) && !looksLikeClaudeKey(s.apiKey)) {
+    s.provider = 'xai';
+    if ($('llmProvider').value !== 'xai') {
+      $('llmProvider').value = 'xai';
+      syncAnalyzeProviderUi();
+    }
+  }
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+  saveScaleSettingsFromUi();
+  if (announce && $('settingsStatus')) {
+    $('settingsStatus').textContent = 'Saved.';
+    setTimeout(() => { if ($('settingsStatus').textContent === 'Saved.') $('settingsStatus').textContent = ''; }, 2000);
+  }
+}
+function saveSettings() {
+  persistLlmSettings({ announce: true });
+}
+function getSettings() {
+  try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { return {}; }
+}
+function getActiveLlm() {
+  const stored = getSettings();
+  const form = readLlmForm();
+  const xaiKey = (form.xaiApiKey != null ? form.xaiApiKey : stored.xaiApiKey || '').trim();
+  const claudeKey = (form.apiKey != null ? form.apiKey : stored.apiKey || '').trim();
+  const picker = form.provider || stored.provider;
+  const xaiModel = form.xaiModel || stored.xaiModel || XAI_DEFAULT_MODEL;
+  const claudeModel = form.model || stored.model || CLAUDE_DEFAULT_MODEL;
+  if (picker === 'xai') {
+    return { provider: 'xai', apiKey: xaiKey, model: xaiModel, brand: 'Grok' };
+  }
+  if (looksLikeXaiKey(claudeKey)) {
+    return { provider: 'xai', apiKey: claudeKey, model: xaiModel, brand: 'Grok' };
+  }
+  if (looksLikeXaiKey(xaiKey) && !looksLikeClaudeKey(claudeKey)) {
+    return { provider: 'xai', apiKey: xaiKey, model: xaiModel, brand: 'Grok' };
+  }
+  return { provider: 'claude', apiKey: claudeKey, model: claudeModel, brand: 'Claude' };
+}
+function syncAnalyzeProviderUi() {
+  const isXai = $('llmProvider') && $('llmProvider').value === 'xai';
+  if ($('claudeModelBlock')) $('claudeModelBlock').style.display = isXai ? 'none' : '';
+  if ($('xaiModelBlock')) $('xaiModelBlock').style.display = isXai ? '' : 'none';
+  if ($('claudeModelHelp')) $('claudeModelHelp').style.display = isXai ? 'none' : '';
+  if ($('xaiModelHelp')) $('xaiModelHelp').style.display = isXai ? '' : 'none';
+}
+function showXaiKeyHelp() {
+  $('mTitle').textContent = 'xAI API key required';
+  $('mPub').textContent = '';
+  $('mBody').innerHTML = `<div style="padding:20px 0; line-height:1.6;">${XAI_KEY_HELP}</div>`;
+  $('modal').classList.add('show');
+}
+function getScaleSettings() {
+  try { return JSON.parse(localStorage.getItem(SCALE_KEY) || '{}'); } catch { return {}; }
+}
+function saveScaleSettingsFromUi() {
+  const skipHwRam = !!($('scaleSkipHwRam') && $('scaleSkipHwRam').checked);
+  localStorage.setItem(SCALE_KEY, JSON.stringify({ skipHwRam }));
+}
+function loadScaleSettingsUi() {
+  const s = getScaleSettings();
+  if ($('scaleSkipHwRam')) $('scaleSkipHwRam').checked = !!s.skipHwRam;
+}
+loadSettings();
+loadScaleSettingsUi();
+$('btnSaveSettings').addEventListener('click', saveSettings);
+$('llmProvider').addEventListener('change', () => {
+  syncAnalyzeProviderUi();
+  persistLlmSettings({ announce: true, fromPicker: true });
+});
+['claudeApiKey', 'xaiApiKey', 'claudeModel', 'xaiModel'].forEach(id => {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener('change', () => persistLlmSettings({ announce: true }));
+  el.addEventListener('blur', () => persistLlmSettings({ announce: false }));
+});
+if ($('scaleSkipHwRam')) {
+  $('scaleSkipHwRam').addEventListener('change', () => {
+    saveScaleSettingsFromUi();
+    $('settingsStatus').textContent = 'Large-tenant option saved.';
+    setTimeout(() => { if ($('settingsStatus').textContent === 'Large-tenant option saved.') $('settingsStatus').textContent = ''; }, 2000);
+  });
+}
+
+// --- Click error code -> analyze with Claude or Grok ---
+$('failedRows').addEventListener('click', e => {
+  const cell = e.target.closest('.err-clickable');
+  if (!cell) return;
+  const idx = Number(cell.dataset.rowIdx);
+  const row = (window.__failedFiltered || [])[idx];
+  if (row) analyzeError(row);
+});
+
+// --- Error analysis cache (localStorage) ---
+const CACHE_KEY = 'errorAnalysisCache';
+function cacheKey(errCode, model) { return `${errCode}::${model}`; }
+function getCachedAnalysis(errCode, model) {
+  try {
+    const all = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
+    return all[cacheKey(errCode, model)] || null;
+  } catch { return null; }
+}
+function setCachedAnalysis(errCode, model, text) {
+  try {
+    const all = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
+    all[cacheKey(errCode, model)] = { text, model, cachedAt: Date.now() };
+    localStorage.setItem(CACHE_KEY, JSON.stringify(all));
+  } catch {}
+}
+function renderAnalysis(text, opts) {
+  const html = esc(text)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
+  const badge = opts.cached
+    ? `<span style="display:inline-block; font-size:11px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; color:var(--muted); border:1px solid var(--line); padding:3px 8px; border-radius:4px;">Cached · ${new Date(opts.cachedAt).toLocaleDateString()}</span>`
+    : `<span style="display:inline-block; font-size:11px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; color:var(--accent); border:1px solid var(--line); padding:3px 8px; border-radius:4px;">Fresh</span>`;
+  const reanalyzeBtn = `<button id="reanalyzeBtn" style="font-size:12px; padding:4px 10px; border:1px solid var(--line); background:transparent; color:var(--muted); border-radius:4px; cursor:pointer;">↻ Re-analyze</button>`;
+  $('mBody').innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px;">${badge}${reanalyzeBtn}</div>
+    <div style="padding:0; line-height:1.6;">${html}</div>`;
+}
+
+// Provider-agnostic model call.
+// - provider 'xai' → xAI Grok chat completions (api.x.ai), key from Settings.
+// - Anthropic keys (sk-ant-…) hit the Anthropic Messages API directly.
+// - OpenRouter keys (sk-or-…) hit OpenRouter's OpenAI-compatible endpoint
+//   with the same Claude models, billed through the OpenRouter account.
+// Claude vs OpenRouter is detected from the key prefix. Returns
+// { text, inputTokens, outputTokens }.
+const OPENROUTER_MODELS = {
+  'claude-haiku-4-5-20251001': 'anthropic/claude-haiku-4.5',
+  'claude-sonnet-5': 'anthropic/claude-sonnet-5',
+  'claude-opus-4-8': 'anthropic/claude-opus-4.8',
+  'claude-fable-5': 'anthropic/claude-fable-5',
+  // Legacy — no longer in the picker, but previously saved settings may still reference them
+  'claude-sonnet-4-6': 'anthropic/claude-sonnet-4.6',
+  'claude-opus-4-7': 'anthropic/claude-opus-4.7'
+};
+async function readApiError(res) {
+  const raw = await res.text();
+  let detail = raw;
+  try {
+    const j = JSON.parse(raw);
+    if (typeof j.error === 'string') detail = j.error;
+    else if (j.error && typeof j.error.message === 'string') detail = j.error.message;
+    else if (typeof j.message === 'string') detail = j.message;
+  } catch {}
+  return `API ${res.status}: ${detail}`;
+}
+async function callModel({ apiKey, model, maxTokens, prompt, provider }) {
+  const isXai = provider === 'xai';
+  const isOpenRouter = !isXai && /^sk-or-/i.test(apiKey);
+  const openaiCompat = isXai || isOpenRouter;
+  const url = isXai
+    ? 'https://api.x.ai/v1/chat/completions'
+    : isOpenRouter
+      ? 'https://openrouter.ai/api/v1/chat/completions'
+      : 'https://api.anthropic.com/v1/messages';
+  const headers = isXai
+    ? {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + apiKey
+      }
+    : isOpenRouter
+      ? {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + apiKey,
+          'HTTP-Referer': 'https://haavarstein.github.io/intune-dashboard/',
+          'X-Title': 'THE Intune Dashboard'
+        }
+      : {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        };
+  const body = isXai
+    ? {
+        model,
+        max_completion_tokens: maxTokens,
+        messages: [{ role: 'user', content: prompt }]
+      }
+    : {
+        model: isOpenRouter ? (OPENROUTER_MODELS[model] || model) : model,
+        max_tokens: maxTokens,
+        messages: [{ role: 'user', content: prompt }]
+      };
+  let res;
+  try {
+    res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+  } catch (e) {
+    throw new Error(`Network error calling ${url}: ${e.message || e}`);
+  }
+  if (!res.ok) throw new Error(await readApiError(res));
+  const data = await res.json();
+  const usage = data.usage || {};
+  return openaiCompat
+    ? {
+        text: data.choices?.[0]?.message?.content || '',
+        inputTokens: usage.prompt_tokens,
+        outputTokens: usage.completion_tokens
+      }
+    : {
+        text: (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n'),
+        inputTokens: usage.input_tokens,
+        outputTokens: usage.output_tokens
+      };
+}
+
+async function analyzeError(row, forceFresh = false) {
+  persistLlmSettings({ announce: false });
+  const { apiKey, model, provider, brand } = getActiveLlm();
+  const activeModel = model;
+  if (!apiKey) {
+    if (brand === 'Grok') showXaiKeyHelp();
+    else {
+      $('mTitle').textContent = 'Claude API key required';
+      $('mPub').textContent = '';
+      $('mBody').innerHTML = '<div style="padding:20px 0;">Add your Claude API key in the <strong>Settings</strong> tab to enable AI analysis.</div>';
+      $('modal').classList.add('show');
+    }
+    return;
+  }
+  if (provider !== 'xai' && looksLikeTwitterDevKey(apiKey)) {
+    showXaiKeyHelp();
+    return;
+  }
+  const errCode = row.ErrorCode;
+  const hexCode = row.HexErrorCode;
+  $('mTitle').textContent = `Error ${errCode}`;
+  $('mPub').textContent = `${selectedApp.displayName} on ${row.DeviceName}`;
+  $('modal').classList.add('show');
+
+  // Cache check
+  if (!forceFresh) {
+    const cached = getCachedAnalysis(errCode, activeModel);
+    if (cached) {
+      renderAnalysis(cached.text, { cached: true, cachedAt: cached.cachedAt });
+      $('reanalyzeBtn').onclick = () => analyzeError(row, true);
+      return;
+    }
+  }
+
+  $('mBody').innerHTML = `<div style="padding:20px 0; color:var(--muted);">Analyzing with ${brand}…</div>`;
+
+  const prompt = `You are an Intune/MEM expert. Analyze this Windows app install failure and give a concise diagnosis plus remediation steps.
+
+App: ${selectedApp.displayName} (version ${row.AppVersion || 'unknown'})
+Device: ${row.DeviceName}
+Platform: ${row.Platform}
+Install state: ${row.InstallState}
+Error code (decimal): ${errCode}
+Error code (hex): ${hexCode || 'n/a'}
+Install state detail: ${row.InstallStateDetail || 'n/a'}
+
+Respond in this format:
+1. **What this error means** (1-2 sentences)
+2. **Most likely cause** (1-2 sentences)
+3. **Remediation steps** (numbered list, 3-5 steps max)
+
+Be specific to Intune. No preamble.`;
+
+  try {
+    const { text, inputTokens, outputTokens } = await callModel({ apiKey, model: activeModel, maxTokens: 1024, prompt, provider });
+    trackUsage(activeModel, inputTokens, outputTokens);
+    setCachedAnalysis(errCode, activeModel, text);
+    renderAnalysis(text, { cached: false });
+    $('reanalyzeBtn').onclick = () => analyzeError(row, true);
+  } catch (e) {
+    $('mBody').innerHTML = `<div style="padding:20px 0; color:var(--accent);">Analysis failed: ${esc(e.message)}</div>`;
+  }
+}
+
+// --- Analyze tab: log file analysis ---
+const IME_LOG_PATH = 'C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs';
+const MODEL_PRICING = {
+  'claude-haiku-4-5-20251001': { in: 1, out: 5 },
+  'claude-sonnet-5':           { in: 3, out: 15 }, // intro $2/$10 thru Aug 2026 — standard rate used so estimates stay conservative
+  'claude-opus-4-8':           { in: 5, out: 25 },
+  'claude-fable-5':            { in: 10, out: 50 },
+  // Legacy — keeps cost tracking working for previously saved settings
+  'claude-sonnet-4-6':         { in: 3, out: 15 },
+  'claude-opus-4-7':           { in: 5, out: 25 },
+  'grok-4.6':                  { in: 2, out: 6 },
+  'grok-4.3':                  { in: 1.25, out: 2.5 }
+};
+function estimateCost(model, inTok, outTok) {
+  const p = MODEL_PRICING[model];
+  if (!p || inTok == null || outTok == null) return '$?';
+  const cost = (inTok * p.in + outTok * p.out) / 1_000_000;
+  return cost < 0.01 ? `$${cost.toFixed(4)}` : `$${cost.toFixed(3)}`;
+}
+
+function trackUsage(model, inTok, outTok) {
+  const p = MODEL_PRICING[model];
+  if (!p || inTok == null || outTok == null) return;
+  const cost = (inTok * p.in + outTok * p.out) / 1_000_000;
+  const prev = JSON.parse(sessionStorage.getItem('apiSession') || '{"cost":0,"calls":0}');
+  const next = { cost: prev.cost + cost, calls: prev.calls + 1 };
+  sessionStorage.setItem('apiSession', JSON.stringify(next));
+  renderSessionPill();
+}
+
+function renderSessionPill() {
+  const s = JSON.parse(sessionStorage.getItem('apiSession') || '{"cost":0,"calls":0}');
+  const pill = $('sessionPill');
+  if (!pill) return;
+  if (s.calls === 0) { pill.style.display = 'none'; return; }
+  pill.style.display = 'inline-flex';
+  $('sessionCost').textContent = '$' + s.cost.toFixed(s.cost < 0.01 ? 4 : s.cost < 1 ? 3 : 2);
+  $('sessionCalls').textContent = s.calls;
+}
+
+
+
+// ============================================================
+// Intune sub-tabs (Failed Apps / Hardware)
+// ============================================================
+let activeSubtab = 'overview';
+let hwLoaded = false;
+let hwDevices = [];
+let hwSortKey = 'deviceName';
+let hwSortDir = 'asc';
+let hwTileFilter = null; // null | 'recycle' | 'lowStorage' | 'lowRam'
+
+document.querySelectorAll('.subtab').forEach(btn => {
+  btn.addEventListener('click', () => switchSubtab(btn.dataset.subtab));
+});
+
+// Panel id + lazy loader per sub-tab (single source of truth for show/hide + first open).
+const SUBTAB_CFG = {
+  overview:        { panel: 'intuneSubOverview',        load: () => !overviewLoaded && loadOverview() },
+  installed:       { panel: 'intuneSubInstalled',       load: () => !installedAppsLoaded && loadInstalledApps() },
+  approvals:       { panel: 'intuneSubApprovals',       load: () => !approvalsLoaded && loadApprovals() },
+  failed:          { panel: 'intuneSubFailed',          load: () => !failedAppsLoaded && loadApps() },
+  required:        { panel: 'intuneSubRequired',        load: () => !requiredLoaded && loadRequiredApps() },
+  uninstall:       { panel: 'intuneSubUninstall',       load: () => !uninstallLoaded && loadUninstallApps() },
+  metering:        { panel: 'intuneSubMetering',        load: () => !meteringLoaded && loadMetering() },
+  remediation:     { panel: 'intuneSubRemediation',     load: () => !remediationLoaded && loadRemediation() },
+  hardware:        { panel: 'intuneSubHardware',        load: () => !hwLoaded && loadHardware() },
+  diskspace:       { panel: 'intuneSubDiskspace',       load: () => !diskspaceLoaded && loadDiskspace() },
+  appversions:     { panel: 'intuneSubAppversions',     load: () => !appversionsLoaded && loadAppversions() },
+  autopilot:       { panel: 'intuneSubAutopilot',       load: () => !autopilotLoaded && loadAutopilot() },
+  bitlocker:       { panel: 'intuneSubBitlocker',       load: () => !bitlockerLoaded && loadBitlocker() },
+  secureboot:      { panel: 'intuneSubSecureboot',      load: () => !securebootLoaded && loadSecureBoot() },
+  certhealth:      { panel: 'intuneSubCerthealth',      load: () => !certhealthLoaded && loadCerthealth() },
+  assignments:     { panel: 'intuneSubAssignments',     load: () => !assignmentsPoliciesLoaded && loadAssignmentsPolicies() },
+  posture:         { panel: 'intuneSubPosture',         load: () => !postureLoaded && loadPosture() },
+  vulnerabilities: { panel: 'intuneSubVulnerabilities', load: () => !vulnLoaded && loadVulnerabilities() },
+  drift:           { panel: 'intuneSubDrift',           load: () => !driftLoaded && loadDriftData() },
+  softdeleted:     { panel: 'intuneSubSoftdeleted',     load: () => !softdeletedLoaded && loadSoftdeleted() },
+  staleusers:      { panel: 'intuneSubStaleusers',      load: () => !staleusersLoaded && loadStaleUsers() },
+  aiagents:        { panel: 'intuneSubAiagents',        load: () => !aiagentsLoaded && loadAiAgents() }
+};
+
+function switchSubtab(name) {
+  activeSubtab = name;
+  document.querySelectorAll('.subtab').forEach(b => b.classList.toggle('active', b.dataset.subtab === name));
+  for (const [key, cfg] of Object.entries(SUBTAB_CFG)) {
+    const el = $(cfg.panel);
+    if (el) el.style.display = key === name ? '' : 'none';
+  }
+  const cfg = SUBTAB_CFG[name];
+  if (cfg && cfg.load) cfg.load();
+  document.dispatchEvent(new CustomEvent('brays-nav', { detail: { page: name === 'overview' ? 'dashboard' : name } }));
+}
+
+// ============================================================
+// Overview sub-tab — tenant-wide health summary.
+// 3 parallel lightweight calls, each individually catch'd so one
+// failure (e.g. Defender KQL on a non-P2 tenant) doesn't break
+// the other tiles.
+// ============================================================
+let overviewLoaded = false;
+let overviewLoading = false;
+
+async function loadOverview() {
+  if (overviewLoading || overviewLoaded) return;
+  overviewLoading = true;
+  document.dispatchEvent(new CustomEvent('brays-overview', { detail: 'loading' }));
+  $('overviewLoading').style.display = '';
+  $('overviewContent').style.display = 'none';
+  $('overviewError').innerHTML = '';
+
+  const hwSelect = encodeURIComponent('id,deviceName,userPrincipalName,osVersion,operatingSystem,lastSyncDateTime,complianceState,isEncrypted');
+  const failedBody = {
+    top: 50, skip: 0,
+    filter: "(FailedDeviceCount gt '0')",
+    orderBy: ['FailedDeviceCount desc'],
+    search: '',
+    select: ['DisplayName', 'Publisher', 'Platform', 'FailedDeviceCount', 'ApplicationId']
+  };
+
+  let devicesError = null;
+  let failedError = null;
+  let driftError = null;
+
+  const [hwAll, failedRaw, driftJson] = await Promise.all([
+    graphGetAll(`beta/deviceManagement/managedDevices?$select=${hwSelect}`)
+      .catch(e => { devicesError = e.message || String(e); console.warn('Overview: hardware fetch failed', devicesError); return null; }),
+    graphPost('beta/deviceManagement/reports/getAppsInstallSummaryReport', failedBody)
+      .catch(e => { failedError = e.message || String(e); console.warn('Overview: failed-apps fetch failed', failedError); return null; }),
+    graphPost('v1.0/security/runHuntingQuery', { Query: DRIFT_KQL })
+      .catch(e => { driftError = e.message || String(e); console.warn('Overview: drift KQL failed (P2/E5 required?)', driftError); return null; })
+  ]);
+
+  let summary = null;
+  if (hwAll && typeof window.braysSummarise === 'function') {
+    summary = window.braysSummarise(hwAll);
+    $('ovTotalDevices').textContent = summary.total;
+    const platSummary = summary.platforms.slice(0, 3).map(p => p.name + ': ' + p.count).join(' · ');
+    $('ovTotalDevicesSub').textContent = platSummary || 'across all platforms';
+    $('ovAttention').textContent = summary.attention;
+    $('ovAttentionSub').textContent = summary.nonCompliant + ' non-compliant · ' + summary.win10 + ' Win10 · ' + summary.stale + ' stale';
+  } else if (hwAll) {
+    $('ovTotalDevices').textContent = String(hwAll.length);
+    $('ovTotalDevicesSub').textContent = 'Summary helper unavailable';
+    $('ovAttention').textContent = '—';
+    $('ovAttentionSub').textContent = '—';
+  } else {
+    $('ovTotalDevices').textContent = '—';
+    $('ovTotalDevicesSub').textContent = 'managedDevices fetch failed';
+    $('ovAttention').textContent = '—';
+    $('ovAttentionSub').textContent = '—';
+  }
+
+  let failedSection;
+  if (failedRaw) {
+    const rows = parseReport(failedRaw).filter(r => r.DisplayName && !/^update for/i.test(r.DisplayName));
+    const totalFailedDevices = rows.reduce((s, r) => s + (Number(r.FailedDeviceCount) || 0), 0);
+    $('ovFailedApps').textContent = rows.length;
+    $('ovFailedAppsSub').textContent = totalFailedDevices + ' failed devices total';
+    const top5 = rows.slice().sort((a, b) => (b.FailedDeviceCount || 0) - (a.FailedDeviceCount || 0)).slice(0, 5);
+    $('ovFailedAppsList').innerHTML = top5.length
+      ? top5.map(r => `<tr data-overview-jump="failed" style="cursor:pointer;" title="Open Failed Install"><td>${esc(r.DisplayName)}</td><td>${esc(r.Publisher) || '—'}</td><td>${r.FailedDeviceCount}</td></tr>`).join('')
+      : '<tr><td colspan="3" class="empty">No apps with failures.</td></tr>';
+    failedSection = {
+      status: 'ok',
+      apps: rows.length,
+      failedDeviceTotal: totalFailedDevices,
+      top: top5.map(r => ({
+        name: r.DisplayName,
+        publisher: r.Publisher || '',
+        failedDevices: Number(r.FailedDeviceCount) || 0
+      }))
+    };
+  } else {
+    $('ovFailedApps').textContent = '—';
+    $('ovFailedAppsSub').textContent = 'report fetch failed';
+    $('ovFailedAppsList').innerHTML = '<tr><td colspan="3" class="empty">—</td></tr>';
+    failedSection = { status: 'error', message: failedError || 'Application install report failed.' };
+  }
+
+  let driftSection;
+  if (driftJson) {
+    const results = Array.isArray(driftJson.results) ? driftJson.results : [];
+    const bySoftware = new Map();
+    for (const r of results) {
+      const name = r.SoftwareName || '';
+      const vendor = r.SoftwareVendor || '';
+      const version = r.SoftwareVersion || '';
+      const count = Number(r.DeviceCount) || 0;
+      if (!name || !version || count === 0) continue;
+      const key = name + '|' + vendor;
+      if (!bySoftware.has(key)) bySoftware.set(key, { name: titleCase(name), versions: [] });
+      bySoftware.get(key).versions.push(count);
+    }
+    const drifted = [];
+    for (const s of bySoftware.values()) {
+      s.versions.sort((a, b) => b - a);
+      const total = s.versions.reduce((a, b) => a + b, 0);
+      const driftPct = total > 0 ? ((total - s.versions[0]) / total) * 100 : 0;
+      const driftedDevices = total - s.versions[0];
+      drifted.push({ name: s.name, driftPct, driftedDevices });
+    }
+    const overTwenty = drifted.filter(d => d.driftPct > 20).length;
+    $('ovDrift').textContent = overTwenty;
+    $('ovDriftSub').textContent = drifted.length + ' unique components scanned';
+    const top5 = drifted.filter(d => d.driftPct > 0).sort((a, b) => b.driftPct - a.driftPct).slice(0, 5);
+    $('ovDriftList').innerHTML = top5.length
+      ? top5.map(d => `<tr data-overview-jump="drift" style="cursor:pointer;" title="Open Drift & Compliance"><td>${esc(d.name)}</td><td>${d.driftPct.toFixed(1)}%</td><td>${d.driftedDevices}</td></tr>`).join('')
+      : '<tr><td colspan="3" class="empty">No drift detected.</td></tr>';
+    driftSection = {
+      status: 'ok',
+      overTwenty,
+      scanned: drifted.length,
+      top: top5.map(d => ({ name: d.name, driftPct: d.driftPct, driftedDevices: d.driftedDevices }))
+    };
+  } else {
+    $('ovDrift').textContent = '—';
+    $('ovDriftSub').textContent = 'Defender P2/E5 required';
+    $('ovDriftList').innerHTML = '<tr><td colspan="3" class="empty">Defender data unavailable.</td></tr>';
+    driftSection = { status: 'unavailable', message: 'Defender hunting data is unavailable. This report needs Defender for Endpoint P2 or E5, and a security role that can run advanced hunting.' };
+  }
+
+  window.__overviewSnapshot = {
+    refreshedAt: new Date().toISOString(),
+    devices: summary ? { status: 'ok', summary } : { status: 'error', message: devicesError || 'Managed device list failed.' },
+    failed: failedSection,
+    drift: driftSection
+  };
+  document.dispatchEvent(new CustomEvent('brays-overview', { detail: 'ready' }));
+
+  overviewLoaded = true;
+  overviewLoading = false;
+  $('overviewLoading').style.display = 'none';
+  $('overviewContent').style.display = '';
+}
+
+// Delegated: catches clicks on any [data-overview-jump] element including
+// rows rendered after this script runs.
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-overview-jump]');
+  if (!el) return;
+  // Only fire when the clicked element is inside the Overview sub-tab
+  if (!el.closest('#intuneSubOverview')) return;
+  switchSubtab(el.dataset.overviewJump);
+});
+
+const GB = 1024 * 1024 * 1024;
+const toGB = b => (!b || b <= 0) ? 0 : b / GB;
+// Bumped on refresh / tenant switch so in-flight RAM fan-outs exit early.
+let hwLoadGen = 0;
+let hwAbort = null;
+
+function setHwLoading(text, cancelable) {
+  $('hwLoading').style.display = 'flex';
+  $('hwLoadingText').textContent = text;
+  $('btnHwCancel').style.display = cancelable ? '' : 'none';
+}
+function hideHwLoading() {
+  $('hwLoading').style.display = 'none';
+  $('btnHwCancel').style.display = 'none';
+}
+function cancelHardwareLoad() {
+  hwLoadGen++;
+  if (hwAbort) { try { hwAbort.abort(); } catch (_) {} }
+  $('btnHwCancel').style.display = 'none';
+  if (hwDevices.length) {
+    setHwLoading('Cancelled — showing data gathered so far (RAM may be incomplete).', false);
+    setTimeout(() => { if ($('hwLoadingText').textContent.startsWith('Cancelled')) hideHwLoading(); }, 2800);
+  } else {
+    hwLoaded = false;
+    hideHwLoading();
+  }
+}
+
+async function loadHardware() {
+  if (hwAbort) { try { hwAbort.abort(); } catch (_) {} }
+  hwAbort = new AbortController();
+  const signal = hwAbort.signal;
+  const gen = ++hwLoadGen;
+  hwLoaded = true;
+  setHwLoading('Loading devices…', true);
+  $('hwContent').style.display = 'none';
+  $('hwError').innerHTML = '';
+  try {
+    const select = 'id,deviceName,manufacturer,model,physicalMemoryInBytes,totalStorageSpaceInBytes,' +
+                   'freeStorageSpaceInBytes,osVersion,operatingSystem,lastSyncDateTime,' +
+                   'serialNumber,userPrincipalName,azureADDeviceId';
+    // Fetch Intune managedDevices + Entra /devices in parallel.
+    // Entra fetch is wrapped — if the user denies Device.Read.All the hygiene
+    // tiles fall back gracefully instead of failing the whole tab.
+    const [all, entraIds] = await Promise.all([
+      graphGetAll('beta/deviceManagement/managedDevices?$select=' + encodeURIComponent(select), {
+        signal,
+        onPage: (n) => {
+          if (gen === hwLoadGen) setHwLoading(`Loading devices… ${n}`, true);
+        }
+      }),
+      graphGetAll('v1.0/devices?$select=deviceId', { signal }).then(arr => new Set(arr.map(d => (d.deviceId || '').toLowerCase()).filter(Boolean))).catch(e => {
+        if (e && e.name === 'AbortError') throw e;
+        console.warn('Entra /devices fetch failed', e);
+        return null;
+      })
+    ]);
+    if (gen !== hwLoadGen) return;
+
+    // Pre-compute serial duplicates so each device knows whether it shares its serial with another record.
+    const serialCounts = new Map();
+    for (const d of all) {
+      const s = (d.serialNumber || '').trim();
+      if (!s) continue;
+      serialCounts.set(s, (serialCounts.get(s) || 0) + 1);
+    }
+
+    hwDevices = all.map(d => {
+      const aadId = (d.azureADDeviceId || '').toLowerCase();
+      const serial = (d.serialNumber || '').trim();
+      return {
+        id: d.id,
+        deviceName: d.deviceName || '—',
+        manufacturer: d.manufacturer || '—',
+        model: d.model || '—',
+        ramGB: Math.round(toGB(d.physicalMemoryInBytes)),
+        totalGB: Math.round(toGB(d.totalStorageSpaceInBytes)),
+        freeGB: Math.round(toGB(d.freeStorageSpaceInBytes)),
+        osVersion: d.osVersion || '—',
+        os: d.operatingSystem || 'Unknown',
+        lastSync: d.lastSyncDateTime || '',
+        serialNumber: serial,
+        userPrincipalName: d.userPrincipalName || '',
+        azureADDeviceId: d.azureADDeviceId || '',
+        _dupSerial: serial ? (serialCounts.get(serial) || 0) > 1 : false,
+        _missingEntra: entraIds === null ? false : (aadId ? !entraIds.has(aadId) : true),
+        _noPrimaryUser: !d.userPrincipalName,
+        _entraLookupOk: entraIds !== null
+      };
+    });
+
+    // Show the table immediately (storage/OS/stale tiles are ready). RAM often
+    // needs a per-device GET — fill that in the background with progress.
+    populateHwFilterOptions();
+    renderHardware();
+    $('hwContent').style.display = '';
+
+    const needRam = hwDevices.filter(d => !d.ramGB);
+    if (!needRam.length) {
+      hideHwLoading();
+      return;
+    }
+
+    if (getScaleSettings().skipHwRam) {
+      setHwLoading(`Slim mode: skipped RAM backfill for ${needRam.length} device(s). Turn off in Settings → Large tenants, then Refresh.`, false);
+      setTimeout(() => { if (gen === hwLoadGen) hideHwLoading(); }, 4000);
+      return;
+    }
+
+    setHwLoading(`Fetching RAM details 0/${needRam.length}…`, true);
+    let done = 0;
+    // physicalMemoryInBytes is usually empty on the list endpoint; per-device
+    // GET with bounded concurrency (token cache + $top pagination already help).
+    await mapPool(needRam, 25, async (dev) => {
+      if (gen !== hwLoadGen || signal.aborted) return;
+      try {
+        const detail = await graphGet(
+          `beta/deviceManagement/managedDevices/${dev.id}?$select=physicalMemoryInBytes`,
+          { signal }
+        );
+        if (gen !== hwLoadGen) return;
+        dev.ramGB = Math.round(toGB(detail.physicalMemoryInBytes));
+      } catch (e) {
+        if (e && e.name === 'AbortError') throw e;
+        /* leave ramGB as 0 */
+      }
+      done++;
+      if (gen === hwLoadGen && (done % 40 === 0 || done === needRam.length)) {
+        setHwLoading(`Fetching RAM details ${done}/${needRam.length}…`, true);
+      }
+    }, { signal });
+    if (gen !== hwLoadGen) return;
+    renderHardware(); // refresh RAM tiles + table
+    hideHwLoading();
+  } catch (e) {
+    if (e && e.name === 'AbortError') {
+      if (gen === hwLoadGen && hwDevices.length) {
+        renderHardware();
+        setHwLoading('Cancelled — showing data gathered so far (RAM may be incomplete).', false);
+        setTimeout(() => { if (gen === hwLoadGen) hideHwLoading(); }, 2800);
+      } else if (gen === hwLoadGen) {
+        hwLoaded = false;
+        hideHwLoading();
+      }
+      return;
+    }
+    if (gen !== hwLoadGen) return;
+    hwLoaded = false; // retry on next visit
+    hideHwLoading();
+    $('hwError').innerHTML = `<div class="error-banner">Failed to load devices: ${esc(e.message || e)}</div>`;
+  }
+}
+
+function isRecycle(d) {
+  return d.ramGB <= 4 || d.totalGB <= 128 || d.freeGB <= 10;
+}
+
+function populateHwFilterOptions() {
+  const mfr = [...new Set(hwDevices.map(d => d.manufacturer).filter(Boolean))].sort();
+  const plat = [...new Set(hwDevices.map(d => d.os).filter(Boolean))].sort();
+  $('hwManufacturerFilter').innerHTML = '<option value="">All</option>' +
+    mfr.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  $('hwPlatformFilter').innerHTML = '<option value="">All</option>' +
+    plat.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+  // Default to Windows when available
+  if (plat.includes('Windows')) $('hwPlatformFilter').value = 'Windows';
+}
+
+function ramBucket(gb) {
+  if (gb <= 4) return 'le4';
+  if (gb >= 5 && gb <= 8) return '8';
+  if (gb >= 9 && gb <= 16) return '16';
+  if (gb >= 32) return 'ge32';
+  return 'other';
+}
+function winBucket(osVersion) {
+  if (!osVersion) return null;
+  if (osVersion.startsWith('10.0.19')) return 'win10';
+  if (osVersion.startsWith('10.0.26')) return 'win11';
+  return null;
+}
+function storageBucket(gb) {
+  if (gb <= 64) return 'le64';
+  if (gb >= 65 && gb <= 128) return '128';
+  if (gb >= 129 && gb <= 256) return '256';
+  if (gb >= 512) return 'ge512';
+  return 'other';
+}
+
+const STALE_THRESHOLD_MS = 90 * 24 * 60 * 60 * 1000;
+function isStale(d) {
+  if (!d.lastSync) return true; // never synced → counts as stale
+  const t = Date.parse(d.lastSync);
+  if (Number.isNaN(t)) return false;
+  return (Date.now() - t) > STALE_THRESHOLD_MS;
+}
+
+function filterHw() {
+  const q = $('hwFilter').value.toLowerCase();
+  const ramF = $('hwRamFilter').value;
+  const storF = $('hwStorageFilter').value;
+  const mfrF = $('hwManufacturerFilter').value;
+  const platF = $('hwPlatformFilter').value;
+  return hwDevices.filter(d => {
+    if (platF && d.os !== platF) return false;
+    if (hwTileFilter) {
+      const [kind, val] = hwTileFilter.split(':');
+      if (kind === 'ram' && ramBucket(d.ramGB) !== val) return false;
+      if (kind === 'stor' && storageBucket(d.totalGB) !== val) return false;
+      if (kind === 'win' && winBucket(d.osVersion) !== val) return false;
+      if (kind === 'stale' && !isStale(d)) return false;
+      if (kind === 'hygiene') {
+        if (val === 'dupSerial' && !d._dupSerial) return false;
+        if (val === 'missingEntra' && !d._missingEntra) return false;
+        if (val === 'noUser' && !d._noPrimaryUser) return false;
+      }
+    }
+    if (q && !(
+      d.deviceName.toLowerCase().includes(q) ||
+      d.model.toLowerCase().includes(q) ||
+      d.manufacturer.toLowerCase().includes(q)
+    )) return false;
+    if (ramF && ramBucket(d.ramGB) !== ramF) return false;
+    if (storF && storageBucket(d.totalGB) !== storF) return false;
+    if (mfrF && d.manufacturer !== mfrF) return false;
+    return true;
+  });
+}
+
+function renderHardware() {
+  // KPIs and donut reflect the current platform filter (but not other filters)
+  const platF = $('hwPlatformFilter').value;
+  const platScope = platF ? hwDevices.filter(d => d.os === platF) : hwDevices;
+  const ramCounts = { le4: 0, '8': 0, '16': 0, ge32: 0 };
+  const storCounts = { le64: 0, '128': 0, '256': 0, ge512: 0 };
+  const winCounts = { win10: 0, win11: 0 };
+  let staleCount = 0, dupSerialCount = 0, missingEntraCount = 0, noUserCount = 0;
+  const entraLookupOk = platScope.length === 0 ? true : platScope[0]._entraLookupOk;
+  platScope.forEach(d => {
+    const rb = ramBucket(d.ramGB); if (rb in ramCounts) ramCounts[rb]++;
+    const sb = storageBucket(d.totalGB); if (sb in storCounts) storCounts[sb]++;
+    const wb = winBucket(d.osVersion); if (wb) winCounts[wb]++;
+    if (isStale(d)) staleCount++;
+    if (d._dupSerial) dupSerialCount++;
+    if (d._missingEntra) missingEntraCount++;
+    if (d._noPrimaryUser) noUserCount++;
+  });
+  $('hwWin10').textContent = winCounts.win10;
+  $('hwWin11').textContent = winCounts.win11;
+  $('hwStale').textContent = staleCount;
+  $('hwDupSerial').textContent = dupSerialCount;
+  $('hwMissingEntra').textContent = entraLookupOk ? missingEntraCount : '—';
+  $('hwNoUser').textContent = noUserCount;
+  $('hwRam4').textContent = ramCounts.le4;
+  $('hwRam8').textContent = ramCounts['8'];
+  $('hwRam16').textContent = ramCounts['16'];
+  $('hwRam32').textContent = ramCounts.ge32;
+  $('hwStor64').textContent = storCounts.le64;
+  $('hwStor128').textContent = storCounts['128'];
+  $('hwStor256').textContent = storCounts['256'];
+  $('hwStor512').textContent = storCounts.ge512;
+
+  // Modern OS rate = Win11 / (Win10 + Win11). Null when fleet has no
+  // Windows devices in scope (e.g. macOS-only platform filter).
+  const winTotal = winCounts.win10 + winCounts.win11;
+  const osRate = winTotal === 0 ? null : (winCounts.win11 / winTotal) * 100;
+  setGaugeKpi('hwOsRing', 'hwOsRate', osRate, { thresholds: { good: 85, watch: 50 } });
+
+  renderHwDonut();
+
+  let rows = filterHw();
+  rows.sort((a, b) => {
+    let va = a[hwSortKey], vb = b[hwSortKey];
+    if (typeof va === 'number' && typeof vb === 'number') {
+      return hwSortDir === 'asc' ? va - vb : vb - va;
+    }
+    va = (va ?? '').toString().toLowerCase();
+    vb = (vb ?? '').toString().toLowerCase();
+    if (va < vb) return hwSortDir === 'asc' ? -1 : 1;
+    if (va > vb) return hwSortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  const tbody = $('hwRows');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">No devices match.</td></tr>';
+  } else {
+    tbody.innerHTML = rows.map(d => {
+      const warn = isRecycle(d);
+      const ramCell = d.ramGB <= 4 ? `<td class="warn-cell">${d.ramGB || '—'}</td>` : `<td>${d.ramGB || '—'}</td>`;
+      const totCell = d.totalGB <= 128 ? `<td class="warn-cell">${d.totalGB || '—'}</td>` : `<td>${d.totalGB || '—'}</td>`;
+      const freeCell = d.freeGB <= 10 ? `<td class="warn-cell">${d.freeGB || '—'}</td>` : `<td>${d.freeGB || '—'}</td>`;
+      return `
+        <tr class="${warn ? 'warn-row' : ''}">
+          <td class="app-name"><a href="https://intune.microsoft.com/#view/Microsoft_Intune_Devices/DeviceSettingsMenuBlade/~/hardware/mdmDeviceId/${encodeURIComponent(d.id)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(d.deviceName)}</a></td>
+          <td>${esc(d.manufacturer)}</td>
+          <td>${esc(d.model)}</td>
+          ${ramCell}
+          ${totCell}
+          ${freeCell}
+          <td>${esc(d.osVersion)}</td>
+          <td class="date">${esc(fmtIntuneDate(d.lastSync))}</td>
+          <td style="white-space:nowrap;"><span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:12px;" data-audit-device="${esc(d.id)}" data-audit-name="${esc(d.deviceName)}" title="Show recent admin actions on this device">📋 History</span> <span style="color:var(--line);">·</span> <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:12px;" data-ime-checkin="${esc(d.id)}" data-ime-name="${esc(d.deviceName)}" title="Force an IME required-app check-in on this device (on-demand)">⚡ Check-in</span></td>
+        </tr>`;
+    }).join('');
+
+    tbody.querySelectorAll('[data-audit-device]').forEach(el => {
+      el.addEventListener('click', () => openAuditModal(el.dataset.auditDevice, el.dataset.auditName));
+    });
+  }
+  $('hwCount').textContent = rows.length;
+
+  document.querySelectorAll('#intuneSubHardware thead th').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    const arrow = th.querySelector('.arrow');
+    if (arrow) arrow.textContent = '▼';
+    if (th.dataset.sort === hwSortKey) {
+      th.classList.add(hwSortDir === 'asc' ? 'sort-asc' : 'sort-desc');
+      if (arrow) arrow.textContent = hwSortDir === 'asc' ? '▲' : '▼';
+    }
+  });
+}
+
+// ============================================================
+// Soft-deleted devices sub-tab — Entra ID recycle bin (preview).
+// LIST piggybacks on existing Device.Read.All. RESTORE requires
+// Directory.AccessAsUser.All, fetched just-in-time at click.
+// ============================================================
+let softdeletedLoaded = false;
+let softdeletedLoading = false;
+let sdDevices = [];
+
+async function loadSoftdeleted() {
+  if (softdeletedLoading) return;
+  softdeletedLoading = true;
+  softdeletedLoaded = true;
+  $('sdLoading').style.display = '';
+  $('sdContent').style.display = 'none';
+  $('sdError').innerHTML = '';
+  $('sdNotice').innerHTML = '';
+  try {
+    const select = 'id,displayName,deletedDateTime,operatingSystem,operatingSystemVersion,' +
+                   'accountEnabled,trustType,deviceOwnership';
+    const path = 'beta/directory/deletedItems/microsoft.graph.device?$select=' +
+                 encodeURIComponent(select) + '&$top=100';
+    const all = await graphGetAll(path);
+    const now = Date.now();
+    sdDevices = all.map(d => {
+      const deletedMs = d.deletedDateTime ? Date.parse(d.deletedDateTime) : 0;
+      const daysSinceDelete = deletedMs ? Math.floor((now - deletedMs) / 86400000) : 0;
+      return {
+        id: d.id,
+        displayName: d.displayName || `(unnamed — ${(d.id || '').slice(0,8)})`,
+        operatingSystem: d.operatingSystem || '—',
+        osVersion: d.operatingSystemVersion || '',
+        trustType: d.trustType || '—',
+        deletedAt: d.deletedDateTime || '',
+        daysRemaining: Math.max(0, 30 - daysSinceDelete),
+        accountEnabled: !!d.accountEnabled,
+        ownership: d.deviceOwnership || ''
+      };
+    });
+    sdDevices.sort((a, b) => (b.deletedAt || '').localeCompare(a.deletedAt || ''));
+    renderSoftdeleted();
+    $('sdLoading').style.display = 'none';
+    $('sdContent').style.display = '';
+  } catch (e) {
+    softdeletedLoaded = false;
+    $('sdLoading').style.display = 'none';
+    const hint = e.status === 403
+      ? ' You may need Cloud Device Administrator, Intune Administrator, or Global Administrator in this tenant.'
+      : '';
+    $('sdError').innerHTML = `<div class="error-banner">Failed to load soft-deleted devices: ${esc(e.message || e)}${hint}</div>`;
+  } finally {
+    softdeletedLoading = false;
+  }
+}
+
+function renderSoftdeleted() {
+  const q = ($('sdFilter').value || '').toLowerCase().trim();
+  const rows = sdDevices.filter(d =>
+    !q || d.displayName.toLowerCase().includes(q) || d.operatingSystem.toLowerCase().includes(q));
+  const tbody = $('sdRows');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">No soft-deleted devices. Anything deleted in the last 30 days will appear here.</td></tr>';
+  } else {
+    tbody.innerHTML = rows.map(d => {
+      const daysCell = d.daysRemaining <= 5
+        ? `<td class="warn-cell">${d.daysRemaining}</td>`
+        : `<td>${d.daysRemaining}</td>`;
+      const osCell = d.osVersion
+        ? `<td title="${esc(d.osVersion)}">${esc(d.operatingSystem)}</td>`
+        : `<td>${esc(d.operatingSystem)}</td>`;
+      return `
+        <tr>
+          <td class="app-name">${esc(d.displayName)}</td>
+          ${osCell}
+          <td>${esc(d.trustType)}</td>
+          <td title="${esc(d.id)}" style="font-family:monospace; font-size:12px;">${esc((d.id || '').slice(0, 8))}…</td>
+          <td class="date">${esc(fmtIntuneDate(d.deletedAt))}</td>
+          ${daysCell}
+          <td>${d.accountEnabled ? 'Yes' : 'No'}</td>
+          <td><button class="btn" data-restore-id="${esc(d.id)}" data-restore-name="${esc(d.displayName)}">↻ Restore</button></td>
+        </tr>`;
+    }).join('');
+    tbody.querySelectorAll('[data-restore-id]').forEach(btn => {
+      btn.addEventListener('click', () => onRestoreClick(btn));
+    });
+  }
+  $('sdCount').textContent = rows.length;
+}
+
+(function wireSoftdeletedControls() {
+  const filter = $('sdFilter');
+  if (filter) filter.addEventListener('input', renderSoftdeleted);
+  const refresh = $('btnSdRefresh');
+  if (refresh) refresh.addEventListener('click', () => {
+    softdeletedLoaded = false;
+    loadSoftdeleted();
+  });
+})();
+
+function renderHwDonut() {
+  // RAM distribution donut — inline SVG, theme-consistent colors
+  const platF = $('hwPlatformFilter').value;
+  const scope = platF ? hwDevices.filter(d => d.os === platF) : hwDevices;
+  const buckets = [
+    { label: '≤ 4 GB', key: 'le4', color: 'var(--accent)' },
+    { label: '8 GB', key: '8', color: '#5a8ec4' },
+    { label: '16 GB', key: '16', color: '#4caf50' },
+    { label: '32+ GB', key: 'ge32', color: '#6b6b70' },
+    { label: 'Other', key: 'other', color: '#cfc8bd' }
+  ];
+  const counts = buckets.map(b => scope.filter(d => ramBucket(d.ramGB) === b.key).length);
+  const total = counts.reduce((a, b) => a + b, 0) || 1;
+  const cx = 70, cy = 70, r = 50, stroke = 18;
+  const circ = 2 * Math.PI * r;
+  let offset = 0;
+  const segments = buckets.map((b, i) => {
+    const pct = counts[i] / total;
+    const len = pct * circ;
+    const seg = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${b.color}" stroke-width="${stroke}" stroke-dasharray="${len} ${circ - len}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${cx} ${cy})"></circle>`;
+    offset += len;
+    return seg;
+  }).join('');
+  $('hwDonut').innerHTML = `
+    <svg width="140" height="140" viewBox="0 0 140 140">
+      ${segments}
+      <text x="${cx}" y="${cy - 4}" text-anchor="middle" font-size="22" font-weight="800" fill="var(--ink)" font-family="Hanken Grotesk, sans-serif">${scope.length}</text>
+      <text x="${cx}" y="${cy + 14}" text-anchor="middle" font-size="9" fill="var(--muted)" font-family="Hanken Grotesk, sans-serif" letter-spacing="1.4">DEVICES</text>
+    </svg>`;
+  $('hwDonutLegend').innerHTML = buckets.map((b, i) => `
+    <div class="breakdown-row">
+      <div><span class="dot" style="background:${b.color};"></span><span class="label">${b.label}</span></div>
+      <div><span class="val">${counts[i]}</span></div>
+    </div>`).join('');
+}
+
+$('hwFilter').addEventListener('input', renderHardware);
+$('hwRamFilter').addEventListener('change', renderHardware);
+$('hwStorageFilter').addEventListener('change', renderHardware);
+$('hwManufacturerFilter').addEventListener('change', renderHardware);
+$('hwPlatformFilter').addEventListener('change', renderHardware);
+$('btnHwRefresh').addEventListener('click', () => { hwLoaded = false; loadHardware(); });
+$('btnHwCancel').addEventListener('click', cancelHardwareLoad);
+const hwTileMap = {
+  hwWin10Tile: 'win:win10',
+  hwWin11Tile: 'win:win11',
+  hwStaleTile: 'stale:1',
+  hwRam4Tile: 'ram:le4',
+  hwRam8Tile: 'ram:8',
+  hwRam16Tile: 'ram:16',
+  hwRam32Tile: 'ram:ge32',
+  hwStor64Tile: 'stor:le64',
+  hwStor128Tile: 'stor:128',
+  hwStor256Tile: 'stor:256',
+  hwStor512Tile: 'stor:ge512',
+  hwDupSerialTile: 'hygiene:dupSerial',
+  hwMissingEntraTile: 'hygiene:missingEntra',
+  hwNoUserTile: 'hygiene:noUser'
+};
+function syncHwTileUi() {
+  Object.keys(hwTileMap).forEach(id => {
+    $(id).classList.toggle('active', hwTileMap[id] === hwTileFilter);
+  });
+  $('btnHwClearKpi').style.display = hwTileFilter ? '' : 'none';
+}
+Object.keys(hwTileMap).forEach(tileId => {
+  $(tileId).addEventListener('click', () => {
+    const target = hwTileMap[tileId];
+    // Toggle off if clicking the already-active tile; otherwise switch to it
+    hwTileFilter = (hwTileFilter === target) ? null : target;
+    syncHwTileUi();
+    renderHardware();
+  });
+});
+$('btnHwClearKpi').addEventListener('click', () => {
+  hwTileFilter = null;
+  syncHwTileUi();
+  renderHardware();
+});
+
+$('btnHwExport').addEventListener('click', () => {
+  const rows = filterHw();
+  const header = ['DeviceName', 'Manufacturer', 'Model', 'RAM_GB', 'Total_GB', 'Free_GB', 'Windows', 'LastCheckIn'];
+  const lines = [header.join(',')];
+  for (const d of rows) {
+    lines.push([d.deviceName, d.manufacturer, d.model, d.ramGB, d.totalGB, d.freeGB, d.osVersion, d.lastSync].map(escCsv).join(','));
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'hardware-inventory.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+document.querySelectorAll('#intuneSubHardware thead th').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.sort;
+    if (hwSortKey === key) hwSortDir = hwSortDir === 'asc' ? 'desc' : 'asc';
+    else { hwSortKey = key; hwSortDir = 'asc'; }
+    renderHardware();
+  });
+});
+
+// ============================================================
+// Device action audit forensics (Hardware drill-in)
+// Per-device audit-event drill from /deviceManagement/auditEvents
+// filtered by resourceId. Surfaces who did what to a device (wipe,
+// retire, sync, rename, primary-user change, etc.) — Intune holds
+// 30 days of retention so older actions won't appear.
+// Scope: DeviceManagementApps.Read.All (already in SCOPES).
+// ============================================================
+// Module-level scan state so the "Scan more" button can resume from
+// where the previous batch stopped.
+let auditScanState = null;
+// Tuned for speed: $top=999 is the max for Intune audit collections,
+// so 4 pages cover the same ~4k events as the previous 8×500 in half
+// the round-trips. "Scan more" still extends in the same batch size.
+const AUDIT_BATCH_PAGES = 4;
+const AUDIT_PAGE_SIZE = 999;
+
+async function openAuditModal(deviceId, deviceName) {
+  $('auditSubtitle').textContent = deviceName || deviceId;
+  $('auditBody').innerHTML = `<div class="loading" style="padding:24px; text-align:center; color:var(--muted);">Loading audit history…</div>`;
+  $('auditModal').classList.add('show');
+  // Graph's $filter on resources/any against auditEvents is unreliable, so
+  // we fetch with a date filter only and scan resources[] client-side.
+  const since = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
+  const baseFilter = `activityDateTime ge ${since}`;
+  auditScanState = {
+    deviceId,
+    deviceName,
+    lowerId: (deviceId || '').toLowerCase(),
+    scanned: 0,
+    matches: [],
+    nextPath: `v1.0/deviceManagement/auditEvents?$filter=${encodeURIComponent(baseFilter)}&$top=${AUDIT_PAGE_SIZE}&$orderby=activityDateTime desc`
+  };
+  await runAuditScan(AUDIT_BATCH_PAGES);
+}
+
+async function runAuditScan(maxPages) {
+  const s = auditScanState;
+  if (!s) return;
+  let page = 0;
+  try {
+    while (s.nextPath && page < maxPages) {
+      $('auditBody').innerHTML = `<div class="loading" style="padding:24px; text-align:center; color:var(--muted);">Scanning audit log… ${s.scanned.toLocaleString()} events checked, ${s.matches.length} matches</div>`;
+      const data = await graphGet(s.nextPath);
+      const events = (data.value || []);
+      s.scanned += events.length;
+      for (const e of events) {
+        const hit = (e.resources || []).some(r => (r.resourceId || '').toLowerCase() === s.lowerId);
+        if (hit) s.matches.push(e);
+      }
+      const next = data['@odata.nextLink'];
+      s.nextPath = next ? next.replace('https://graph.microsoft.com/', '') : null;
+      page++;
+    }
+    renderAuditResults();
+  } catch (e) {
+    console.error('Audit scan failed', e);
+    $('auditBody').innerHTML = `<div class="error-banner">Failed to load audit history: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+function renderAuditResults() {
+  const s = auditScanState;
+  if (!s) return;
+  const hasMore = !!s.nextPath;
+  const moreButton = hasMore
+    ? `<button class="btn btn-ghost" id="btnAuditScanMore" style="margin-left:12px; padding:4px 12px; font-size:12px;">Scan another ${(AUDIT_BATCH_PAGES * AUDIT_PAGE_SIZE).toLocaleString()} events →</button>`
+    : '';
+  const capNote = hasMore ? ` <span style="color:var(--accent);">More older events exist — use the button to extend the scan.</span>` : '';
+
+  if (!s.matches.length) {
+    $('auditBody').innerHTML = `
+      <div class="meta" style="padding:20px; text-align:center;">
+        <div>Scanned ${s.scanned.toLocaleString()} audit event${s.scanned === 1 ? '' : 's'} from the last 180 days; none referenced this device.</div>
+        <div style="font-size:11px; margin-top:8px;">Either no admin actions (wipe / retire / sync / rename / primary-user change / RBAC) have touched this device in that window, or the audit log retention has expired (Intune retains up to ~1 year by default).</div>
+        ${hasMore ? `<div style="margin-top:14px;">${moreButton}</div>` : ''}
+      </div>`;
+  } else {
+    const rows = s.matches.map(e => {
+      const actor = e.actor || {};
+      const who = actor.userPrincipalName || actor.applicationDisplayName || actor.servicePrincipalName || '—';
+      const ip = actor.ipAddress ? `<br><span class="meta" style="font-size:11px;">from ${esc(actor.ipAddress)}</span>` : '';
+      const result = (e.activityResult || '').toLowerCase();
+      const resultBadge = result === 'success'
+        ? `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:#e7f6ec; border:1px solid #a7d7b5; color:#1f5d33;">${esc(e.activityResult)}</span>`
+        : (result === 'failure' || result === 'fail')
+          ? `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:#fdecec; border:1px solid #f5b5b5; color:#8a2020;">${esc(e.activityResult)}</span>`
+          : esc(e.activityResult || '—');
+      return `
+        <tr>
+          <td class="date">${e.activityDateTime ? new Date(e.activityDateTime).toLocaleString() : '—'}</td>
+          <td>${esc(e.activity || e.displayName || '—')}</td>
+          <td>${esc(e.activityType || '—')}</td>
+          <td>${resultBadge}</td>
+          <td>${esc(who)}${ip}</td>
+          <td><span class="meta" style="font-size:11px;">${esc(e.category || '—')}</span></td>
+        </tr>`;
+    }).join('');
+    $('auditBody').innerHTML = `
+      <p style="margin-top:0; font-size:12px; color:var(--muted);">${s.matches.length} event${s.matches.length === 1 ? '' : 's'} reference this device · ${s.scanned.toLocaleString()} total events scanned (last 180 days).${capNote}${moreButton}</p>
+      <table>
+        <thead><tr><th>When</th><th>Activity</th><th>Type</th><th>Result</th><th>Actor</th><th>Category</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  const btn = $('btnAuditScanMore');
+  if (btn) {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Scanning…';
+      await runAuditScan(AUDIT_BATCH_PAGES);
+    });
+  }
+}
+
+function closeAuditModal() {
+  $('auditModal').classList.remove('show');
+}
+
+$('auditModal').addEventListener('click', e => { if (e.target === $('auditModal')) closeAuditModal(); });
+
+// ============================================================
+// Vulnerabilities (Defender via Graph Advanced Hunting - KQL)
+// Requires: ThreatHunting.Read.All (Microsoft Graph, delegated)
+// Licensing: Defender for Endpoint P2 or Microsoft 365 E5
+// ============================================================
+let vulnLoaded = false;
+let vulnRows = [];
+let vulnSortKey = 'weaknesses';
+let vulnSortDir = 'desc';
+
+// ExposedDevices is sourced from DeviceTvmSoftwareVulnerabilities (devices
+// with at least one open CVE for the software) — not from inventory
+// (devices that just have it installed). The old behavior over-counted
+// Defender-itself rows (e.g. Defender_antimalware_platform showed the
+// whole fleet exposed because every Defender-onboarded device has it).
+// Issue #4 — https://github.com/haavarstein/intune-dashboard/issues/4
+const VULN_KQL = `
+DeviceTvmSoftwareInventory
+| summarize by SoftwareName, SoftwareVendor, OSPlatform
+| join kind=leftouter (
+    DeviceTvmSoftwareVulnerabilities
+    | summarize Weaknesses = dcount(CveId), ExposedDevices = dcount(DeviceId)
+      by SoftwareName, SoftwareVendor, OSPlatform
+  ) on SoftwareName, SoftwareVendor, OSPlatform
+| project SoftwareName, OSPlatform, SoftwareVendor,
+          Weaknesses = coalesce(Weaknesses, 0),
+          ExposedDevices = coalesce(ExposedDevices, 0)
+| order by Weaknesses desc, ExposedDevices desc
+`;
+
+function titleCase(s) {
+  if (!s) return '';
+  return s.replace(/\b([a-z])/g, c => c.toUpperCase());
+}
+
+function defenderInventoryUrl(row) {
+  const account = msalApp && msalApp.getActiveAccount();
+  const tid = account && account.tenantId ? account.tenantId : '';
+  const tidParam = `tid=${encodeURIComponent(tid)}`;
+  if (row && row.vendor && row.softwareName) {
+    const vendorSlug = row.vendor.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const nameSlug = encodeURIComponent(encodeURIComponent(row.softwareName.toLowerCase()));
+    if (vendorSlug && nameSlug) {
+      const softwareId = `${vendorSlug}-_-${nameSlug}`;
+      return `https://security.microsoft.com/vulnerability-management-inventories/applications/overview?${tidParam}&softwareId=${softwareId}`;
+    }
+  }
+  return `https://security.microsoft.com/vulnerability-management-inventories/VulnerableComponents?${tidParam}`;
+}
+
+// Shared 403 explainer for the advanced-hunting tabs (Vulnerabilities,
+// Drift & Compliance, AI agents). Defender XDR evaluates the signed-in
+// USER's own security permissions (SecurityData.Read / TvmData.Read) on
+// top of the app's ThreatHunting.Read.All scope — even a Global
+// Administrator without a security role gets "Missing user permissions"
+// with an empty user-permissions list. Security Administrator fixes it;
+// Security Reader is the least-privilege read-only alternative.
+function hunting403Html(e) {
+  if (/Missing user permissions/i.test(e.message || '')) {
+    return `<div class="error-banner">⚠ <strong>Defender security role required.</strong> Advanced hunting checks the signed-in <em>user's</em> Defender XDR permissions on top of the app's <code>ThreatHunting.Read.All</code> scope — even a Global Administrator gets this 403 without one. Assign yourself the <strong>Security Administrator</strong> Entra role (or <strong>Security Reader</strong> for read-only), wait a few minutes for it to propagate, then sign out and back in.<br><span style="font-size:12px; color:var(--muted);">${esc(e.message || String(e))}</span></div>`;
+  }
+  return `<div class="error-banner">⚠ <strong>403 from Graph.</strong> ${esc(e.message || String(e))}<br>Likely causes: the tenant isn't licensed for Defender for Endpoint P2 / M365 E5 (required for advanced hunting), admin consent for <code>ThreatHunting.Read.All</code> hasn't been granted yet (sign out and back in to re-consent), or the signed-in user lacks a Defender security role (Security Administrator / Security Reader).</div>`;
+}
+
+async function loadVulnerabilities(force = false) {
+  if (vulnLoaded && !force) return;
+  $('vulnLoading').style.display = '';
+  $('vulnContent').style.display = 'none';
+  $('vulnError').innerHTML = '';
+  try {
+    const json = await graphPost('v1.0/security/runHuntingQuery', { Query: VULN_KQL });
+    const results = Array.isArray(json.results) ? json.results : [];
+    vulnRows = results.map(r => ({
+      softwareName: titleCase(r.SoftwareName || ''),
+      osPlatform: titleCase(r.OSPlatform || ''),
+      vendor: titleCase(r.SoftwareVendor || ''),
+      weaknesses: Number(r.Weaknesses) || 0,
+      exposedDevices: Number(r.ExposedDevices) || 0
+    }));
+    vulnLoaded = true;
+    $('vulnKpiSoftware').textContent = vulnRows.length;
+    $('vulnLoading').style.display = 'none';
+    $('vulnContent').style.display = '';
+    renderVulnerabilities();
+  } catch (e) {
+    console.error('Vulnerabilities load failed', e);
+    $('vulnLoading').style.display = 'none';
+    $('vulnError').innerHTML = e.status === 403
+      ? hunting403Html(e)
+      : `<div class="error-banner">Failed to load vulnerabilities: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+function renderVulnerabilities() {
+  const q = ($('vulnFilter').value || '').toLowerCase().trim();
+  let rows = vulnRows.filter(r =>
+    !q || r.softwareName.toLowerCase().includes(q)
+       || r.vendor.toLowerCase().includes(q)
+       || r.osPlatform.toLowerCase().includes(q)
+  );
+  const dir = vulnSortDir === 'asc' ? 1 : -1;
+  rows.sort((a, b) => {
+    let av = a[vulnSortKey], bv = b[vulnSortKey];
+    if (typeof av === 'string') { av = av.toLowerCase(); bv = (bv || '').toString().toLowerCase(); }
+    return av < bv ? -dir : av > bv ? dir : 0;
+  });
+  const body = $('vulnRowsBody');
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--muted); padding:24px;">No vulnerabilities found</td></tr>`;
+  } else {
+    body.innerHTML = rows.map(r => `
+      <tr>
+        <td><a href="${defenderInventoryUrl(r)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.softwareName)}</a></td>
+        <td>${esc(r.osPlatform)}</td>
+        <td>${esc(r.vendor)}</td>
+        <td>${r.weaknesses}</td>
+        <td>${r.exposedDevices}</td>
+      </tr>
+    `).join('');
+  }
+  $('vulnCount').textContent = rows.length;
+}
+
+$('vulnFilter').addEventListener('input', renderVulnerabilities);
+$('btnVulnRefresh').addEventListener('click', () => loadVulnerabilities(true));
+$('vulnTileSoftware').addEventListener('click', () => window.open(defenderInventoryUrl(), '_blank', 'noopener'));
+document.querySelectorAll('#intuneSubVulnerabilities th[data-vsort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.vsort;
+    if (vulnSortKey === key) vulnSortDir = vulnSortDir === 'asc' ? 'desc' : 'asc';
+    else { vulnSortKey = key; vulnSortDir = 'asc'; }
+    renderVulnerabilities();
+  });
+});
+
+$('vulnFilter').addEventListener('input', renderVulnerabilities);
+$('btnVulnRefresh').addEventListener('click', () => loadVulnerabilities(true));
+document.querySelectorAll('#intuneSubVulnerabilities th[data-vsort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.vsort;
+    if (vulnSortKey === key) vulnSortDir = vulnSortDir === 'asc' ? 'desc' : 'asc';
+    else { vulnSortKey = key; vulnSortDir = 'asc'; }
+    renderVulnerabilities();
+  });
+});
+
+// ============================================================
+// Drift & Compliance (P2/E5) sub-tab
+//
+// Defender-based: one KQL query against DeviceTvmSoftwareInventory
+// returns (software, vendor, version, deviceCount) rows for the
+// whole fleet. Grouped client-side by software+vendor to compute
+// dominant version and drift %. Requires Defender for Endpoint P2
+// or M365 E5 (same as Vulnerabilities tab).
+// ============================================================
+
+let driftLoaded = false;
+let driftLoading = false;
+let driftApps = [];
+let driftFiltered = [];
+let driftSortKey = 'driftPct';
+let driftSortDir = 'desc';
+
+const DRIFT_WARN_THRESHOLD = 20;
+
+const DRIFT_KQL = `
+DeviceTvmSoftwareInventory
+| where isnotempty(SoftwareName) and isnotempty(SoftwareVersion)
+| summarize DeviceCount = dcount(DeviceId) by SoftwareName, SoftwareVendor, SoftwareVersion
+| order by SoftwareName asc, DeviceCount desc
+`;
+
+async function loadDriftData(force = false) {
+  if (driftLoading) return;
+  if (driftLoaded && !force) return;
+
+  driftLoading = true;
+  $('driftLoading').style.display = '';
+  $('driftContent').style.display = 'none';
+  $('driftError').innerHTML = '';
+
+  try {
+    const json = await graphPost('v1.0/security/runHuntingQuery', { Query: DRIFT_KQL });
+    const results = Array.isArray(json.results) ? json.results : [];
+
+    // Group by software+vendor → accumulate [version, count] pairs
+    const bySoftware = new Map();
+    for (const r of results) {
+      const name = r.SoftwareName || '';
+      const vendor = r.SoftwareVendor || '';
+      const version = r.SoftwareVersion || '';
+      const count = Number(r.DeviceCount) || 0;
+      if (!name || !version || count === 0) continue;
+      const key = `${name}|${vendor}`;
+      if (!bySoftware.has(key)) {
+        bySoftware.set(key, { softwareName: titleCase(name), vendor: titleCase(vendor), versions: [] });
+      }
+      bySoftware.get(key).versions.push([version, count]);
+    }
+
+    driftApps = [...bySoftware.values()].map(s => {
+      const versions = s.versions.slice().sort((a, b) => b[1] - a[1]);
+      const totalInstalled = versions.reduce((sum, [, c]) => sum + c, 0);
+      const [dominantVersion, dominantCount] = versions[0];
+      const driftedDevices = totalInstalled - dominantCount;
+      const driftPct = totalInstalled > 0 ? (driftedDevices / totalInstalled) * 100 : 0;
+      return {
+        key: `${s.softwareName}|${s.vendor}`,
+        softwareName: s.softwareName,
+        vendor: s.vendor,
+        totalInstalled,
+        dominantVersion,
+        dominantCount,
+        driftedDevices,
+        driftPct,
+        versionCount: versions.length,
+        versions
+      };
+    });
+
+    driftLoaded = true;
+    window.driftApps = driftApps;
+    const drifting = driftApps.filter(a => a.driftPct > 0).length;
+    console.log(`[Drift] ${driftApps.length} software components · ${drifting} with drift > 0%. Inspect via window.driftApps`);
+
+    $('driftLoading').style.display = 'none';
+    $('driftContent').style.display = '';
+    renderDriftTab();
+  } catch (e) {
+    console.error('Drift load failed', e);
+    $('driftLoading').style.display = 'none';
+    $('driftError').innerHTML = e.status === 403
+      ? hunting403Html(e)
+      : `<div class="error-banner">Failed to load drift data: ${esc(e.message || String(e))}</div>`;
+  } finally {
+    driftLoading = false;
+  }
+}
+
+function renderDriftTab() {
+  renderDriftKPIs();
+  applyDriftFilter();
+}
+
+function renderDriftKPIs() {
+  const overTen = driftApps.filter(a => a.driftPct > 10).length;
+  const avg = driftApps.length
+    ? driftApps.reduce((s, a) => s + a.driftPct, 0) / driftApps.length
+    : 0;
+  const totalDrifted = driftApps.reduce((s, a) => s + a.driftedDevices, 0);
+  const top = driftApps.filter(a => a.driftPct > 0).sort((a, b) => b.driftPct - a.driftPct)[0];
+
+  $('kDriftHighCount').textContent = overTen;
+  // Gauge shows fleet compliance (the inverse of drift) so high = green,
+  // matching the other dashboard gauges. Render with one decimal place,
+  // not the helper's default rounded integer.
+  const compliance = driftApps.length ? 100 - avg : null;
+  setGaugeKpi('kDriftCompRing', 'kDriftAvg', compliance, {
+    thresholds: { good: 90, watch: 75 },
+    display: compliance == null ? '—' : compliance.toFixed(1) + '%'
+  });
+  $('kDriftDevices').textContent = totalDrifted;
+  $('kDriftTopApp').textContent = top ? top.softwareName : '—';
+  $('kDriftTopAppSub').textContent = top
+    ? `${top.driftPct.toFixed(1)}% · ${top.driftedDevices} devices`
+    : '—';
+}
+
+function applyDriftFilter() {
+  const q = ($('driftFilter').value || '').toLowerCase().trim();
+  driftFiltered = driftApps.filter(a => {
+    if (!q) return true;
+    return (a.softwareName || '').toLowerCase().includes(q) ||
+           (a.vendor || '').toLowerCase().includes(q);
+  });
+  sortDriftRows();
+  renderDriftRows();
+}
+
+function sortDriftRows() {
+  const k = driftSortKey;
+  const dir = driftSortDir === 'desc' ? -1 : 1;
+  driftFiltered.sort((a, b) => {
+    const av = a[k], bv = b[k];
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+    return String(av || '').localeCompare(String(bv || ''), undefined, { sensitivity: 'base' }) * dir;
+  });
+}
+
+function renderDriftRows() {
+  const tbody = $('driftRows');
+  $('driftCount').textContent = driftFiltered.length;
+
+  if (!driftFiltered.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="empty">No software to show.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = driftFiltered.map(a => {
+    const warn = a.driftPct > DRIFT_WARN_THRESHOLD;
+    const driftCell = warn
+      ? `<td style="font-weight:700; color:var(--accent); background:var(--accent-soft);">${a.driftPct.toFixed(1)}%</td>`
+      : `<td>${a.driftPct.toFixed(1)}%</td>`;
+    return `<tr>
+      <td><a href="${defenderInventoryUrl(a)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(a.softwareName)}</a></td>
+      <td>${esc(a.vendor) || '—'}</td>
+      <td class="version">${esc(a.dominantVersion)}</td>
+      ${driftCell}
+      <td>${a.driftedDevices}</td>
+      <td>${a.versionCount}</td>
+    </tr>`;
+  }).join('');
+}
+
+function exportDriftCSV() {
+  const header = ['Software', 'Vendor', 'Dominant Version', 'Drift %',
+                  'Drifted Devices', 'Total Installed', 'Versions Detected'];
+  const lines = [header.join(',')];
+  for (const a of driftFiltered) {
+    lines.push([
+      a.softwareName, a.vendor, a.dominantVersion,
+      a.driftPct.toFixed(2), a.driftedDevices, a.totalInstalled, a.versionCount
+    ].map(escCsv).join(','));
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'drift-compliance.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+$('btnDriftRefresh').addEventListener('click', () => loadDriftData(true));
+$('btnDriftExport').addEventListener('click', exportDriftCSV);
+$('driftFilter').addEventListener('input', applyDriftFilter);
+
+document.querySelectorAll('[data-sort-drift]').forEach(th => {
+  th.addEventListener('click', () => {
+    const k = th.dataset.sortDrift;
+    if (driftSortKey === k) {
+      driftSortDir = driftSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      driftSortKey = k;
+      driftSortDir = ['driftPct', 'driftedDevices', 'versionCount'].includes(k) ? 'desc' : 'asc';
+    }
+    sortDriftRows();
+    renderDriftRows();
+  });
+});
+
+// ============================================================
+// Remediation sub-tab (deviceHealthScripts / Proactive Remediations)
+// Requires: DeviceManagementScripts.Read.All
+// ============================================================
+let remediationLoaded = false;
+let remediationRows = [];
+let remediationSortKey = 'schedule';
+let remediationSortDir = 'asc';
+
+// Schedule rank — lower = sorts earlier in default ascending order.
+const REMEDIATION_SCHEDULE_RANK = { 'Hourly': 0, 'Daily': 1, 'Run once': 2, 'Unassigned': 3 };
+
+function scheduleLabelFromAssignment(a) {
+  const t = a && a.runSchedule && a.runSchedule['@odata.type'];
+  if (!t) return null;
+  if (t.includes('Hourly')) return 'Hourly';
+  if (t.includes('Daily')) return 'Daily';
+  if (t.includes('RunOnce')) return 'Run once';
+  return null;
+}
+
+function summarizeSchedules(assignments) {
+  const labels = new Set();
+  for (const a of (assignments || [])) {
+    const lbl = scheduleLabelFromAssignment(a);
+    if (lbl) labels.add(lbl);
+  }
+  if (!labels.size) return { display: 'Unassigned', rank: REMEDIATION_SCHEDULE_RANK['Unassigned'] };
+  const ordered = [...labels].sort((a, b) => REMEDIATION_SCHEDULE_RANK[a] - REMEDIATION_SCHEDULE_RANK[b]);
+  return { display: ordered.join(', '), rank: REMEDIATION_SCHEDULE_RANK[ordered[0]] };
+}
+
+function remediationBladeUrl(row) {
+  const id = encodeURIComponent(row.id);
+  const name = encodeURIComponent(row.displayName || '');
+  const firstParty = row.isGlobalScript ? 'true' : 'false';
+  return `https://intune.microsoft.com/#view/Microsoft_Intune_Enrollment/UXAnalyticsScriptMenu/~/overview/id/${id}/scriptName/${name}/isFirstParty~/${firstParty}`;
+}
+
+async function loadRemediation(force = false) {
+  if (remediationLoaded && !force) return;
+  $('remediationLoading').style.display = '';
+  $('remediationContent').style.display = 'none';
+  $('remediationError').innerHTML = '';
+  try {
+    let path = 'beta/deviceManagement/deviceHealthScripts?$expand=assignments';
+    const all = [];
+    while (path) {
+      const data = await graphGet(path);
+      if (data.value) all.push(...data.value);
+      const next = data['@odata.nextLink'];
+      path = next ? next.replace('https://graph.microsoft.com/', '') : null;
+    }
+
+    remediationRows = all.map(s => {
+      const sched = summarizeSchedules(s.assignments);
+      return {
+        id: s.id,
+        displayName: s.displayName || '',
+        publisher: s.publisher || '',
+        schedule: sched.display,
+        scheduleRank: sched.rank,
+        assignmentCount: Array.isArray(s.assignments) ? s.assignments.length : 0,
+        lastModified: s.lastModifiedDateTime || '',
+        isGlobalScript: !!s.isGlobalScript
+      };
+    });
+
+    remediationLoaded = true;
+    $('remediationLoading').style.display = 'none';
+    $('remediationContent').style.display = '';
+    renderRemediation();
+    loadImeRunActivity(true); // refresh on-demand run activity on tab (re)load
+  } catch (e) {
+    console.error('Remediation load failed', e);
+    $('remediationLoading').style.display = 'none';
+    $('remediationError').innerHTML = `<div class="error-banner">Failed to load remediations: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+function renderRemediation() {
+  renderRemediationImeStatus();
+  const q = ($('remediationFilter').value || '').toLowerCase().trim();
+  let rows = remediationRows.filter(r =>
+    !q || r.displayName.toLowerCase().includes(q)
+       || r.publisher.toLowerCase().includes(q)
+  );
+
+  const dir = remediationSortDir === 'asc' ? 1 : -1;
+  rows.sort((a, b) => {
+    let av, bv;
+    if (remediationSortKey === 'schedule') {
+      av = a.scheduleRank; bv = b.scheduleRank;
+    } else {
+      av = a[remediationSortKey];
+      bv = b[remediationSortKey];
+      if (typeof av === 'string') { av = av.toLowerCase(); bv = (bv || '').toString().toLowerCase(); }
+    }
+    if (av < bv) return -dir;
+    if (av > bv) return dir;
+    // Secondary sort: displayName A→Z (independent of direction)
+    return a.displayName.toLowerCase().localeCompare(b.displayName.toLowerCase());
+  });
+
+  const body = $('remediationRowsBody');
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--muted); padding:24px;">No remediation scripts found</td></tr>`;
+  } else {
+    body.innerHTML = rows.map(r => `
+      <tr>
+        <td><a href="${remediationBladeUrl(r)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.displayName) || '—'}</a></td>
+        <td>${esc(r.publisher) || '—'}</td>
+        <td>${esc(r.schedule)}</td>
+        <td>${r.assignmentCount}</td>
+        <td class="date">${esc(r.lastModified) ? new Date(r.lastModified).toLocaleString() : '—'}</td>
+      </tr>
+    `).join('');
+  }
+  $('remediationCount').textContent = rows.length;
+}
+
+$('remediationFilter').addEventListener('input', renderRemediation);
+$('btnRemediationRefresh').addEventListener('click', () => loadRemediation(true));
+document.querySelectorAll('#intuneSubRemediation th[data-rsort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.rsort;
+    if (remediationSortKey === key) remediationSortDir = remediationSortDir === 'asc' ? 'desc' : 'asc';
+    else { remediationSortKey = key; remediationSortDir = 'asc'; }
+    renderRemediation();
+  });
+});
+
+// ============================================================
+// Software Metering sub-tab
+// Reads per-device output from a Proactive Remediation detection
+// script (scripts/software-metering-detect.ps1) which emits a
+// base64+gzip snapshot of {app, userInitial, daysSinceUse} rows
+// in `preRemediationDetectionScriptOutput`. We fan out across
+// /deviceHealthScripts/{id}/deviceRunStates, decode, and roll up
+// fleet-wide for license-reclaim signal. No new scope —
+// DeviceManagementConfiguration.Read.All covers deviceRunStates.
+// ============================================================
+
+let meteringLoaded = false;
+let meteringLoading = false;
+let meteringSnapshots = [];      // [{deviceId, deviceName, lastStateUpdate, truncated, rows}]
+let meteringAggregated = [];     // per-app rollup with deviceRows for drilldown
+let meteringFiltered = [];
+let meteringTileFilter = null;   // null | 'idle' | 'reclaim'
+let meteringSelectedApp = null;  // currently drilled-down app
+let meteringDecodeFailures = 0;
+
+let meteringSortKey = 'idle90d';
+let meteringSortDir = 'desc';
+let meteringDrillSortKey = 'daysSinceUse';
+let meteringDrillSortDir = 'desc';
+
+const METERING_IDLE_DAYS = 90;
+const METERING_ACTIVE_DAYS = 30;
+const METERING_RECLAIM_MIN_INSTALLS = 10;
+const METERING_RECLAIM_MIN_IDLE_PCT = 0.5;
+
+async function loadMetering(force = false) {
+  if (meteringLoading) return;
+  if (meteringLoaded && !force) return;
+
+  const customer = loadCustomers().find(c => c.code === getActiveCustomerCode());
+  let scriptId = customer && customer.meteringScriptId;
+
+  $('meteringEmpty').style.display = 'none';
+  $('meteringLoading').style.display = 'none';
+  $('meteringMain').style.display = 'none';
+  $('meteringError').innerHTML = '';
+
+  // Self-heal a missing local ID before declaring "not configured": every
+  // redeploy mints a new script ID and the 404 handler below clears stale
+  // ones, so the script can exist in the tenant while localStorage has no ID.
+  // Look it up by the default display name and re-link (same pattern as the
+  // IME flow's by-name recovery).
+  if (!scriptId && customer) {
+    try {
+      const filter = `displayName eq 'THE Intune Dashboard - Software Metering'`;
+      const found = await graphGet(`beta/deviceManagement/deviceHealthScripts?$filter=${encodeURIComponent(filter)}&$select=id,displayName`);
+      const hits = (found && found.value) || [];
+      if (hits.length === 1) {
+        scriptId = hits[0].id;
+        saveMeteringScriptIdToActiveCustomer(scriptId, 'meteringScriptId');
+        $('meteringError').innerHTML = `<div class="notice-banner" style="margin-bottom:14px;">Re-linked to the metering script found in this tenant (<code>${esc(scriptId)}</code>) — the locally stored script ID was missing or stale.</div>`;
+      }
+    } catch (_) { /* fall through to the deploy wizard */ }
+  }
+
+  if (!scriptId) {
+    $('meteringEmpty').style.display = '';
+    return;
+  }
+
+  meteringLoading = true;
+  $('meteringLoading').style.display = '';
+
+  try {
+    const path = `beta/deviceManagement/deviceHealthScripts/${encodeURIComponent(scriptId)}/deviceRunStates?$expand=managedDevice($select=id,deviceName,userPrincipalName)&$top=200`;
+    const runStates = await graphGetAll(path);
+
+    const snapshots = [];
+    let decodeFailures = 0;
+    let errorSentinels = 0;
+
+    for (const rs of runStates) {
+      const raw = (rs.preRemediationDetectionScriptOutput || '').trim();
+      if (!raw) continue;
+
+      const md = rs.managedDevice || {};
+      const deviceId = md.id || rs.id || '';
+      const deviceName = md.deviceName || deviceId || '(unknown)';
+      const upn = md.userPrincipalName || '';
+      const lastStateUpdate = rs.lastStateUpdateDateTime || null;
+
+      if (raw.startsWith('v1|error|')) {
+        errorSentinels++;
+        continue;
+      }
+
+      try {
+        const decoded = await decodeMeteringPayload(raw);
+        if (decoded && decoded.rows.length) {
+          snapshots.push({
+            deviceId, deviceName, upn,
+            lastStateUpdate,
+            timestamp: decoded.timestamp,
+            truncated: decoded.truncated,
+            rows: decoded.rows,
+          });
+        }
+      } catch (e) {
+        decodeFailures++;
+      }
+    }
+
+    meteringSnapshots = snapshots;
+    meteringDecodeFailures = decodeFailures + errorSentinels;
+    meteringSelectedApp = null;
+    meteringTileFilter = null;
+    aggregateMetering();
+    meteringLoaded = true;
+
+    console.log(`[Metering] ${snapshots.length} device snapshots · ${meteringAggregated.length} apps · ${meteringDecodeFailures} decode failures. Inspect via window.meteringSnapshots / window.meteringAggregated`);
+    window.meteringSnapshots = meteringSnapshots;
+    window.meteringAggregated = meteringAggregated;
+
+    $('meteringLoading').style.display = 'none';
+    $('meteringMain').style.display = '';
+    showMeteringAppsView();
+    renderMeteringTab();
+  } catch (e) {
+    $('meteringLoading').style.display = 'none';
+    // 404 = the saved scriptId no longer exists in Intune (an admin deleted
+    // the deviceHealthScript). Self-heal: clear the stale GUID from the
+    // customer record and drop back into the wizard so a fresh Auto-deploy
+    // creates a new script. Without this, the user is stuck on an error
+    // banner with no UI path to redeploy.
+    if (e.status === 404) {
+      console.warn('Metering scriptId not found in Intune; clearing stale local state', scriptId);
+      clearMeteringScriptIdForActiveCustomer();
+      // Surface the explanation as a one-shot banner at the top of the
+      // wizard. Lives in meteringError (cleared on next loadMetering call),
+      // not meteringEmpty (whose HTML is static and owns the deploy button).
+      $('meteringError').innerHTML = `<div class="notice-banner" style="margin-bottom:14px;">The previously-configured metering script (<code>${esc(scriptId)}</code>) was not found in Intune — it looks like it was deleted. Local state has been cleared; click <strong>⚡ Auto-deploy script…</strong> below to redeploy.</div>`;
+      // Visually float the notice above the wizard so cause precedes effect.
+      const empty = $('meteringEmpty');
+      empty.parentNode.insertBefore($('meteringError'), empty);
+      empty.style.display = '';
+    } else {
+      console.error('Metering load failed', e);
+      // Include an escape-hatch redeploy button so a transient Graph error
+      // (or a deleted script that returns something other than 404) doesn't
+      // strand the user on a banner with no recovery path.
+      $('meteringError').innerHTML = `<div class="error-banner">Failed to load metering data: ${esc(e.message || String(e))} <button class="btn" style="margin-left:12px; padding:4px 10px; font-size:12px;" onclick="openMeteringDeployModal()">⚡ Redeploy script…</button></div>`;
+    }
+  } finally {
+    meteringLoading = false;
+  }
+}
+
+function clearMeteringScriptIdForActiveCustomer(idField = 'meteringScriptId') {
+  const customers = loadCustomers();
+  const code = getActiveCustomerCode();
+  const idx = customers.findIndex(c => c.code === code);
+  if (idx === -1) return;
+  if (!customers[idx][idField]) return;
+  const { [idField]: _, ...rest } = customers[idx];
+  customers[idx] = rest;
+  saveCustomers(customers);
+}
+
+async function gunzipB64(b64) {
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('DecompressionStream not supported in this browser');
+  }
+  // Graph / Intune sometimes insert whitespace or newlines in the base64 blob.
+  const clean = String(b64 || '').replace(/\s+/g, '');
+  const binary = atob(clean);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const ds = new DecompressionStream('gzip');
+  const stream = new Blob([bytes]).stream().pipeThrough(ds);
+  return await new Response(stream).text();
+}
+
+async function decodeMeteringPayload(b64) {
+  return parseMeteringPayload(await gunzipB64(b64));
+}
+
+function parseMeteringPayload(text) {
+  const lines = text.split(/\r?\n/);
+  if (lines.length < 2) throw new Error('payload too short');
+  const headerParts = lines[0].split('|');
+  if (headerParts[0] !== 'v1') throw new Error('unsupported version: ' + headerParts[0]);
+  const timestamp = headerParts[1] || '';
+  let truncated = null;
+  for (let i = 2; i < headerParts.length; i++) {
+    const eq = headerParts[i].indexOf('=');
+    if (eq < 0) continue;
+    const k = headerParts[i].slice(0, eq);
+    const v = headerParts[i].slice(eq + 1);
+    if (k === 'truncated') truncated = v;
+  }
+  const rows = [];
+  for (let i = 2; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const parts = line.split('|');
+    if (parts.length !== 5) continue;
+    const days = parseInt(parts[4], 10);
+    if (!parts[0] || Number.isNaN(days)) continue;
+    rows.push({
+      app: parts[0],
+      publisher: parts[1] || '',
+      version: parts[2] || '',
+      userInitial: parts[3] || '?',
+      daysSinceUse: days,
+    });
+  }
+  return { timestamp, truncated, rows };
+}
+
+function aggregateMetering() {
+  const byApp = new Map();
+  for (const snap of meteringSnapshots) {
+    for (const row of snap.rows) {
+      const key = row.app;
+      if (!byApp.has(key)) {
+        byApp.set(key, {
+          app: row.app,
+          publisherCounts: new Map(),
+          installsSet: new Set(),
+          active30dSet: new Set(),
+          idle90dSet: new Set(),
+          neverLaunchedSet: new Set(),
+          minDays: Infinity,
+          deviceRows: [],
+        });
+      }
+      const a = byApp.get(key);
+      if (row.publisher) a.publisherCounts.set(row.publisher, (a.publisherCounts.get(row.publisher) || 0) + 1);
+      a.installsSet.add(snap.deviceId);
+      if (row.daysSinceUse < 0) {
+        a.neverLaunchedSet.add(snap.deviceId);
+      } else if (row.daysSinceUse < METERING_ACTIVE_DAYS) {
+        a.active30dSet.add(snap.deviceId);
+        if (row.daysSinceUse < a.minDays) a.minDays = row.daysSinceUse;
+      } else if (row.daysSinceUse >= METERING_IDLE_DAYS) {
+        a.idle90dSet.add(snap.deviceId);
+        if (row.daysSinceUse < a.minDays) a.minDays = row.daysSinceUse;
+      } else {
+        if (row.daysSinceUse < a.minDays) a.minDays = row.daysSinceUse;
+      }
+      a.deviceRows.push({
+        deviceId: snap.deviceId,
+        deviceName: snap.deviceName,
+        userInitial: row.userInitial,
+        version: row.version,
+        daysSinceUse: row.daysSinceUse,
+        lastReported: snap.lastStateUpdate,
+      });
+    }
+  }
+  meteringAggregated = [...byApp.values()].map(a => {
+    // Pick the most-common publisher across reporting devices as the canonical display value.
+    let publisher = '';
+    let bestN = 0;
+    for (const [p, n] of a.publisherCounts) { if (n > bestN) { bestN = n; publisher = p; } }
+    return {
+      app: a.app,
+      publisher,
+      installs: a.installsSet.size,
+      active30d: a.active30dSet.size,
+      idle90d: a.idle90dSet.size,
+      neverLaunched: a.neverLaunchedSet.size,
+      lastFleetUse: a.minDays === Infinity ? -1 : a.minDays,
+      deviceRows: a.deviceRows,
+    };
+  });
+}
+
+function isMeteringReclaimCandidate(a) {
+  if (a.installs < METERING_RECLAIM_MIN_INSTALLS) return false;
+  const idleOrNever = a.idle90d + a.neverLaunched;
+  return (idleOrNever / a.installs) >= METERING_RECLAIM_MIN_IDLE_PCT;
+}
+
+function renderMeteringTab() {
+  renderMeteringKPIs();
+  applyMeteringFilter();
+}
+
+function renderMeteringKPIs() {
+  const devices = meteringSnapshots.length;
+  $('kMeteringDevices').textContent = devices || '—';
+
+  if (devices) {
+    const now = Date.now();
+    const ages = meteringSnapshots
+      .map(s => s.lastStateUpdate ? (now - new Date(s.lastStateUpdate).getTime()) / 3600000 : null)
+      .filter(v => v != null && !Number.isNaN(v))
+      .sort((a, b) => a - b);
+    if (ages.length) {
+      const median = ages[Math.floor(ages.length / 2)];
+      const label = median < 24 ? `${median.toFixed(0)}h` : `${(median / 24).toFixed(1)}d`;
+      $('kMeteringDevicesSub').textContent = `median age: ${label}` + (meteringDecodeFailures ? ` · ${meteringDecodeFailures} failed` : '');
+    } else {
+      $('kMeteringDevicesSub').textContent = meteringDecodeFailures ? `${meteringDecodeFailures} failed` : '—';
+    }
+  } else {
+    $('kMeteringDevicesSub').textContent = meteringDecodeFailures ? `${meteringDecodeFailures} failed` : '—';
+  }
+
+  $('kMeteringApps').textContent = meteringAggregated.length || '—';
+
+  let idleTotal = 0;
+  let installTotal = 0;
+  let reclaimCount = 0;
+  for (const a of meteringAggregated) {
+    idleTotal += a.idle90d + a.neverLaunched;
+    installTotal += a.installs;
+    if (isMeteringReclaimCandidate(a)) reclaimCount++;
+  }
+  $('kMeteringIdle').textContent = idleTotal || '—';
+  $('kMeteringReclaim').textContent = reclaimCount || '—';
+
+  // Utilization rate = installs in active use / total installs. Null when
+  // nothing has reported yet (avoids "100%" lie on an empty fleet).
+  const utilRate = installTotal === 0 ? null : ((installTotal - idleTotal) / installTotal) * 100;
+  setGaugeKpi('kMeteringUtilRing', 'kMeteringUtilRate', utilRate, { thresholds: { good: 75, watch: 50 } });
+
+  $('kMeteringIdleTile').classList.toggle('active', meteringTileFilter === 'idle');
+  $('kMeteringReclaimTile').classList.toggle('active', meteringTileFilter === 'reclaim');
+  $('btnMeteringClearKpi').style.display = meteringTileFilter ? '' : 'none';
+}
+
+function applyMeteringFilter() {
+  const q = ($('meteringFilter').value || '').toLowerCase().trim();
+  meteringFiltered = meteringAggregated.filter(a => {
+    if (meteringTileFilter === 'idle' && (a.idle90d + a.neverLaunched) === 0) return false;
+    if (meteringTileFilter === 'reclaim' && !isMeteringReclaimCandidate(a)) return false;
+    if (!q) return true;
+    return (a.app || '').toLowerCase().includes(q) ||
+           (a.publisher || '').toLowerCase().includes(q);
+  });
+  sortMeteringRows();
+  renderMeteringRows();
+}
+
+function sortMeteringRows() {
+  const k = meteringSortKey;
+  const dir = meteringSortDir === 'desc' ? -1 : 1;
+  meteringFiltered.sort((a, b) => {
+    const av = a[k], bv = b[k];
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+    return String(av || '').localeCompare(String(bv || ''), undefined, { sensitivity: 'base' }) * dir;
+  });
+}
+
+function renderMeteringRows() {
+  const tbody = $('meteringAppRows');
+  $('meteringAppCount').textContent = meteringFiltered.length;
+  const truncCount = meteringSnapshots.filter(s => s.truncated).length;
+  const footParts = [];
+  if (truncCount) footParts.push(` · ${truncCount} device${truncCount === 1 ? '' : 's'} sent truncated snapshots`);
+  if (meteringDecodeFailures) footParts.push(` · ${meteringDecodeFailures} device${meteringDecodeFailures === 1 ? '' : 's'} failed to decode`);
+  $('meteringFootnote').textContent = footParts.join('');
+
+  if (!meteringFiltered.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="empty">No apps to show.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = meteringFiltered.map(a => {
+    const lastUse = a.lastFleetUse < 0 ? '—' : `${a.lastFleetUse}d ago`;
+    const reclaim = isMeteringReclaimCandidate(a);
+    const idleCell = reclaim
+      ? `<td style="font-weight:700; color:var(--accent); background:var(--accent-soft);">${a.idle90d}</td>`
+      : `<td>${a.idle90d}</td>`;
+    return `<tr style="cursor:pointer;" data-metering-app="${esc(a.app)}">
+      <td>${esc(a.app)}</td>
+      <td>${esc(a.publisher) || '—'}</td>
+      <td>${a.installs}</td>
+      <td>${a.active30d}</td>
+      ${idleCell}
+      <td>${a.neverLaunched}</td>
+      <td>${lastUse}</td>
+    </tr>`;
+  }).join('');
+}
+
+function openMeteringDrilldown(appKey) {
+  const a = meteringAggregated.find(x => x.app === appKey);
+  if (!a) return;
+  meteringSelectedApp = a;
+  $('meteringAppsView').style.display = 'none';
+  $('meteringDrillView').style.display = '';
+  $('meteringDrillTitle').textContent = `${a.app} — ${a.installs} install${a.installs === 1 ? '' : 's'}, ${a.idle90d} idle 90d+, ${a.neverLaunched} never launched`;
+  $('meteringTableTitle').textContent = a.app;
+  renderMeteringDrillRows();
+}
+
+function showMeteringAppsView() {
+  meteringSelectedApp = null;
+  $('meteringDrillView').style.display = 'none';
+  $('meteringAppsView').style.display = '';
+  $('meteringTableTitle').textContent = 'Apps';
+}
+
+function sortMeteringDrillRows() {
+  if (!meteringSelectedApp) return;
+  const k = meteringDrillSortKey;
+  const dir = meteringDrillSortDir === 'desc' ? -1 : 1;
+  meteringSelectedApp.deviceRows.sort((a, b) => {
+    const av = a[k], bv = b[k];
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+    return String(av || '').localeCompare(String(bv || ''), undefined, { sensitivity: 'base' }) * dir;
+  });
+}
+
+function renderMeteringDrillRows() {
+  if (!meteringSelectedApp) return;
+  sortMeteringDrillRows();
+  const tbody = $('meteringDrillRows');
+  $('meteringDrillCount').textContent = meteringSelectedApp.deviceRows.length;
+  if (!meteringSelectedApp.deviceRows.length) {
+    tbody.innerHTML = `<tr><td colspan="4" class="empty">No devices.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = meteringSelectedApp.deviceRows.map(r => {
+    const days = r.daysSinceUse < 0 ? 'never' : `${r.daysSinceUse}d`;
+    const lastRep = r.lastReported ? new Date(r.lastReported).toISOString().slice(0, 10) : '—';
+    const nameCell = r.deviceId
+      ? `<a href="${intuneDeviceUrl(r.deviceId)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.deviceName)}</a>`
+      : esc(r.deviceName);
+    return `<tr>
+      <td>${nameCell}</td>
+      <td class="version">${esc(r.version) || '—'}</td>
+      <td>${days}</td>
+      <td>${lastRep}</td>
+    </tr>`;
+  }).join('');
+}
+
+function exportMeteringCSV() {
+  const blob = (text, filename) => {
+    const b = new Blob([text], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(b);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+  if (meteringSelectedApp) {
+    const header = ['App', 'Device', 'Version', 'DaysSinceUse', 'LastReported'];
+    const lines = [header.join(',')];
+    for (const r of meteringSelectedApp.deviceRows) {
+      lines.push([
+        meteringSelectedApp.app, r.deviceName, r.version,
+        r.daysSinceUse < 0 ? 'never' : r.daysSinceUse,
+        r.lastReported || '',
+      ].map(escCsv).join(','));
+    }
+    blob(lines.join('\n'), 'software-metering-' + meteringSelectedApp.app.replace(/[^a-z0-9-]/gi, '_').slice(0, 40) + '.csv');
+  } else {
+    const header = ['App', 'Publisher', 'Installs', 'Active 30d', 'Idle 90d+', 'Never launched', 'Last fleet use (days ago)'];
+    const lines = [header.join(',')];
+    for (const a of meteringFiltered) {
+      lines.push([
+        a.app, a.publisher, a.installs, a.active30d, a.idle90d, a.neverLaunched,
+        a.lastFleetUse < 0 ? 'never' : a.lastFleetUse,
+      ].map(escCsv).join(','));
+    }
+    blob(lines.join('\n'), 'software-metering.csv');
+  }
+}
+
+$('kMeteringIdleTile').addEventListener('click', () => {
+  meteringTileFilter = meteringTileFilter === 'idle' ? null : 'idle';
+  renderMeteringTab();
+});
+$('kMeteringReclaimTile').addEventListener('click', () => {
+  meteringTileFilter = meteringTileFilter === 'reclaim' ? null : 'reclaim';
+  renderMeteringTab();
+});
+$('btnMeteringClearKpi').addEventListener('click', () => {
+  meteringTileFilter = null;
+  renderMeteringTab();
+});
+
+$('btnMeteringRefresh').addEventListener('click', () => loadMetering(true));
+$('btnMeteringExport').addEventListener('click', exportMeteringCSV);
+$('meteringFilter').addEventListener('input', applyMeteringFilter);
+$('btnMeteringDrillBack').addEventListener('click', showMeteringAppsView);
+
+$('meteringAppRows').addEventListener('click', e => {
+  const tr = e.target.closest('tr[data-metering-app]');
+  if (!tr) return;
+  openMeteringDrilldown(tr.dataset.meteringApp);
+});
+
+document.querySelectorAll('[data-sort-metering]').forEach(th => {
+  th.addEventListener('click', () => {
+    const k = th.dataset.sortMetering;
+    if (meteringSortKey === k) {
+      meteringSortDir = meteringSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      meteringSortKey = k;
+      meteringSortDir = ['installs', 'active30d', 'idle90d', 'neverLaunched', 'lastFleetUse'].includes(k) ? 'desc' : 'asc';
+    }
+    sortMeteringRows();
+    renderMeteringRows();
+  });
+});
+
+document.querySelectorAll('[data-sort-metering-drill]').forEach(th => {
+  th.addEventListener('click', () => {
+    const k = th.dataset.sortMeteringDrill;
+    if (meteringDrillSortKey === k) {
+      meteringDrillSortDir = meteringDrillSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      meteringDrillSortKey = k;
+      meteringDrillSortDir = ['daysSinceUse'].includes(k) ? 'desc' : 'asc';
+    }
+    renderMeteringDrillRows();
+  });
+});
+
+// ============================================================
+// App versions sub-tab — version sprawl in the Intune app CATALOG
+// (deviceAppManagement/mobileApps), NOT discovered apps. Groups the
+// catalog's app packages by normalized product name, counts how many
+// versions/packages exist per app, and flags packages older than the
+// newest (surplus) and packages assigned to no group (unassigned) —
+// the PatchMyPC-style cleanup targets. Inline 🗑 reuses the existing
+// typed-confirm Delete-from-Intune flow (openDeleteModal), which is
+// multi-admin-approval aware. Read path rides DeviceManagementApps.
+// Read.All (already granted at sign-in); delete requests the ReadWrite
+// scope just-in-time, exactly like the Installed sub-tab's delete.
+// ============================================================
+let appversionsLoaded = false;
+let appversionsLoading = false;
+let appverApps = [];        // aggregated per-app groups
+let appverFiltered = [];    // after dupes/search/KPI filters
+let appverTileFilter = null; // null | 'multi' | 'surplus' | 'unassigned'
+let appverSelectedApp = null;
+let appverSortKey = 'versionCount';
+let appverSortDir = 'desc';
+let appverDrillSortKey = 'version';
+let appverDrillSortDir = 'desc';
+
+// Compare two version strings numerically, segment by segment.
+function appverCmp(a, b) {
+  const pa = String(a).split(/[^\d]+/).filter(Boolean).map(Number);
+  const pb = String(b).split(/[^\d]+/).filter(Boolean).map(Number);
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x !== y) return x - y;
+  }
+  return 0;
+}
+
+// Collapse arch markers and trailing version tails so packages of the
+// same product group together regardless of naming convention.
+function appverNormalizeKey(name) {
+  let s = (name || '').toLowerCase();
+  s = s.replace(/\((?:x64|x86|arm64|64-bit|32-bit|64 bit|32 bit|user|machine|system)[^)]*\)/g, ' ');
+  s = s.replace(/\b(?:x64|x86|amd64|win64|win32|arm64|64-bit|32-bit)\b/g, ' ');
+  s = s.replace(/[\s\-–—]+v?\d+(?:[._]\d+)*\s*$/, ' ');
+  s = s.replace(/\b(?:version|ver|update|release)\s+[\w.]+\s*$/, ' ');
+  s = s.replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+  return s;
+}
+
+// Pull a version string out of whatever app type this is. Win32 uses
+// displayVersion; MSI uses productVersion (sometimes nested).
+function appverVersionOf(app) {
+  return (app.displayVersion
+    || app.productVersion
+    || (app.msiInformation && app.msiInformation.productVersion)
+    || '').toString().trim();
+}
+
+const APPVER_INTENT_LABEL = {
+  required: 'Required', available: 'Available',
+  availableWithoutEnrollment: 'Available (no enrol)', uninstall: 'Uninstall',
+};
+
+async function loadAppversions(force = false) {
+  if ((appversionsLoaded || appversionsLoading) && !force) return;
+  appversionsLoading = true;
+  $('appversionsLoading').style.display = '';
+  $('appversionsContent').style.display = 'none';
+  $('appversionsError').innerHTML = '';
+  try {
+    // Same catalog call the Installed sub-tab uses — full paginated
+    // mobileApps with assignments, so we see assigned AND unassigned.
+    let path = 'beta/deviceAppManagement/mobileApps?$expand=assignments';
+    const all = [];
+    while (path) {
+      const data = await graphGet(path);
+      if (data.value) all.push(...data.value);
+      const next = data['@odata.nextLink'];
+      path = next ? next.replace('https://graph.microsoft.com/', '') : null;
+    }
+
+    const groups = new Map();
+    for (const app of all) {
+      const name = (app.displayName || '').trim();
+      if (!name) continue;
+      const pub = (app.publisher || '').trim();
+      const key = appverNormalizeKey(name) + '|' + pub.toLowerCase();
+      let g = groups.get(key);
+      if (!g) { g = { key, app: name, publisher: pub, platforms: new Set(), packages: [] }; groups.set(key, g); }
+      if (name.length < g.app.length) g.app = name; // prefer the shorter (base) label
+      if (!g.publisher && pub) g.publisher = pub;
+      const plat = platformFromOdataType(app['@odata.type']);
+      if (plat) g.platforms.add(plat);
+      const assignments = app.assignments || [];
+      const intents = [...new Set(assignments.map(a => APPVER_INTENT_LABEL[a.intent] || a.intent).filter(Boolean))];
+      g.packages.push({
+        id: app.id,
+        displayName: name,
+        publisher: pub,
+        version: appverVersionOf(app),
+        platform: plat,
+        assigned: assignments.length > 0,
+        intents,
+        created: app.createdDateTime || null,
+      });
+    }
+
+    appverApps = [...groups.values()].map(g => {
+      const packages = g.packages.slice().sort((a, b) => appverCmp(b.version, a.version));
+      const withVer = packages.filter(p => p.version);
+      const newest = (withVer[0] || packages[0] || {}).version || '';
+      const assignedCount = packages.filter(p => p.assigned).length;
+      const surplus = newest ? packages.filter(p => p.version !== newest).length : 0;
+      packages.forEach(p => { p.isNewest = !!newest && p.version === newest; });
+      return {
+        key: g.key, app: g.app, publisher: g.publisher,
+        platform: [...g.platforms].join(', '),
+        versionCount: packages.length,
+        newest, packages,
+        assignedCount, unassignedCount: packages.length - assignedCount,
+        surplus,
+      };
+    });
+
+    appversionsLoaded = true;
+    appversionsLoading = false;
+    $('appversionsLoading').style.display = 'none';
+    $('appversionsContent').style.display = '';
+    showAppverAppsView();
+    renderAppverTab();
+  } catch (e) {
+    console.error('App versions load failed', e);
+    appversionsLoading = false;
+    appversionsLoaded = false;
+    $('appversionsLoading').style.display = 'none';
+    $('appversionsError').innerHTML = `<div class="error-banner">Failed to load Intune app catalog: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+function renderAppverTab() {
+  const base = appverApps;
+  const total = base.length;
+  const multi = base.filter(a => a.versionCount > 1).length;
+  const surplus = base.reduce((s, a) => s + a.surplus, 0);
+  const unassigned = base.reduce((s, a) => s + a.unassignedCount, 0);
+  const single = base.filter(a => a.versionCount === 1).length;
+  const worst = base.reduce((w, a) => (!w || a.versionCount > w.versionCount) ? a : w, null);
+
+  $('kAppverTotal').textContent = total;
+  $('kAppverMulti').textContent = multi || '0';
+  $('kAppverSurplus').textContent = surplus || '0';
+  $('kAppverUnassigned').textContent = unassigned || '0';
+  if (worst && worst.versionCount > 1) {
+    $('kAppverWorst').textContent = worst.app;
+    $('kAppverWorstSub').textContent = `${worst.versionCount} packages`;
+    $('kAppverWorstTile').dataset.appverKey = worst.key;
+    $('kAppverWorstTile').style.cursor = 'pointer';
+  } else {
+    $('kAppverWorst').textContent = '—';
+    $('kAppverWorstSub').textContent = 'no duplicates';
+    delete $('kAppverWorstTile').dataset.appverKey;
+    $('kAppverWorstTile').style.cursor = '';
+  }
+
+  const rate = total === 0 ? null : (single / total) * 100;
+  setGaugeKpi('kAppverRing', 'kAppverRate', rate, { thresholds: { good: 85, watch: 60 } });
+
+  $('kAppverMultiTile').classList.toggle('active', appverTileFilter === 'multi');
+  $('kAppverSurplusTile').classList.toggle('active', appverTileFilter === 'surplus');
+  $('kAppverUnassignedTile').classList.toggle('active', appverTileFilter === 'unassigned');
+  $('btnAppverClearKpi').style.display = appverTileFilter ? '' : 'none';
+
+  applyAppverFilter();
+}
+
+function applyAppverFilter() {
+  const dupesOnly = $('appverDupesOnly').checked;
+  const q = ($('appverFilter').value || '').toLowerCase().trim();
+  appverFiltered = appverApps.filter(a => {
+    if (dupesOnly && a.versionCount <= 1) return false;
+    if (appverTileFilter === 'multi' && a.versionCount <= 1) return false;
+    if (appverTileFilter === 'surplus' && a.surplus <= 0) return false;
+    if (appverTileFilter === 'unassigned' && a.unassignedCount <= 0) return false;
+    if (!q) return true;
+    return (a.app || '').toLowerCase().includes(q) || (a.publisher || '').toLowerCase().includes(q);
+  });
+  sortAppverRows();
+  renderAppverRows();
+}
+
+function sortAppverRows() {
+  const k = appverSortKey, dir = appverSortDir === 'desc' ? -1 : 1;
+  appverFiltered.sort((a, b) => {
+    if (k === 'newest') return appverCmp(a.newest, b.newest) * dir;
+    const av = a[k], bv = b[k];
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+    return String(av || '').localeCompare(String(bv || ''), undefined, { sensitivity: 'base' }) * dir;
+  });
+}
+
+function appverVerCell(n) {
+  const color = n >= 10 ? '#8a2020' : n >= 5 ? '#704500' : n >= 2 ? 'var(--ink)' : 'var(--muted)';
+  const weight = n >= 2 ? '700' : '400';
+  return `<td style="color:${color}; font-weight:${weight};">${n}</td>`;
+}
+
+function renderAppverRows() {
+  const tbody = $('appverAppRows');
+  $('appverAppCount').textContent = appverFiltered.length;
+  const hiddenSingles = $('appverDupesOnly').checked ? appverApps.filter(a => a.versionCount === 1).length : 0;
+  $('appverFootnote').textContent = hiddenSingles ? ` · ${hiddenSingles} single-version app${hiddenSingles === 1 ? '' : 's'} hidden` : '';
+
+  if (!appverFiltered.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="empty">No apps to show${appverApps.length ? ' (filter active)' : ' — no apps in the catalog'}.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = appverFiltered.map(a => {
+    const unCell = a.unassignedCount > 0
+      ? `<td style="font-weight:700; color:var(--accent); background:var(--accent-soft);">${a.unassignedCount}</td>`
+      : `<td>0</td>`;
+    return `<tr style="cursor:pointer;" data-appver-key="${esc(a.key)}">
+      <td>${esc(a.app)}</td>
+      <td>${esc(a.publisher) || '—'}</td>
+      ${appverVerCell(a.versionCount)}
+      <td class="version">${esc(a.newest) || '—'}</td>
+      <td>${a.assignedCount}</td>
+      ${unCell}
+      <td><span class="badge platform-badge">${esc(a.platform) || '—'}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+// Selected package IDs for bulk delete in the drill view
+const apvSelected = new Set();
+
+function openAppverDrilldown(key) {
+  const a = appverApps.find(x => x.key === key);
+  if (!a) return;
+  appverSelectedApp = a;
+  apvSelected.clear();
+  pendingIntunewinSas = null;
+  setAppverDlStatus('');
+  $('appverAppsView').style.display = 'none';
+  $('appverDrillView').style.display = '';
+  $('appverDrillTitle').textContent = `${a.app} — ${a.versionCount} package${a.versionCount === 1 ? '' : 's'}, ${a.surplus} surplus, ${a.unassignedCount} unassigned`;
+  $('appverTableTitle').textContent = a.app;
+  renderAppverDrillRows();
+}
+
+function showAppverAppsView() {
+  appverSelectedApp = null;
+  apvSelected.clear();
+  $('appverDrillView').style.display = 'none';
+  $('appverAppsView').style.display = '';
+  $('appverTableTitle').textContent = 'Apps';
+}
+
+function sortAppverDrillRows() {
+  if (!appverSelectedApp) return;
+  const k = appverDrillSortKey, dir = appverDrillSortDir === 'desc' ? -1 : 1;
+  appverSelectedApp.packages.sort((a, b) => {
+    if (k === 'version') return appverCmp(a.version, b.version) * dir;
+    if (k === 'assigned') return ((a.assigned ? 1 : 0) - (b.assigned ? 1 : 0)) * dir;
+    if (k === 'created') return ((a.created ? Date.parse(a.created) : 0) - (b.created ? Date.parse(b.created) : 0)) * dir;
+    return 0;
+  });
+}
+
+function renderAppverDrillRows() {
+  if (!appverSelectedApp) return;
+  sortAppverDrillRows();
+  const a = appverSelectedApp;
+  $('appverDrillCount').textContent = a.packages.length;
+  $('appverDrillRows').innerHTML = a.packages.map(p => {
+    const verCell = p.isNewest
+      ? `<td class="version"><strong>${esc(p.version) || '—'}</strong> <span style="color:#1f7a3a; font-weight:700; font-size:11px;">✓ newest</span></td>`
+      : `<td class="version">${esc(p.version) || '—'} <span style="color:#8a2020; font-size:11px;">old</span></td>`;
+    const assignCell = p.assigned
+      ? `<td>${esc(p.intents.join(', ')) || 'Assigned'}</td>`
+      : `<td style="color:#8a2020; font-weight:600;">Unassigned</td>`;
+    const url = `https://intune.microsoft.com/#view/Microsoft_Intune_Apps/SettingsMenu/~/0/appId/${encodeURIComponent(p.id)}`;
+    return `<tr>
+      <td><input type="checkbox" data-apv-select="${esc(p.id)}" ${apvSelected.has(p.id) ? 'checked' : ''}></td>
+      ${verCell}
+      ${assignCell}
+      <td class="date">${esc(fmtIntuneDate(p.created))}</td>
+      <td style="white-space:nowrap;">
+        <a href="${url}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none; font-weight:600; font-size:12px;">Open ↗</a>
+        <span class="appver-del" data-appver-pkg="${esc(p.id)}" title="Delete this package from Intune" style="cursor:pointer; color:#8a2020; font-weight:700; font-size:13px; margin-left:10px;">🗑</span>
+      </td>
+    </tr>`;
+  }).join('');
+  const selCount = a.packages.filter(p => apvSelected.has(p.id)).length;
+  const sa = $('apvSelectAll');
+  sa.checked = a.packages.length > 0 && selCount === a.packages.length;
+  sa.indeterminate = selCount > 0 && selCount < a.packages.length;
+  const btn = $('btnAppverDeleteSel');
+  btn.style.display = selCount ? '' : 'none';
+  btn.textContent = `🗑 Delete Selected (${selCount})`;
+}
+
+function exportAppverCSV() {
+  const blob = (text, filename) => {
+    const b = new Blob([text], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(b);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+  if (appverSelectedApp) {
+    const header = ['App', 'Version', 'Assignment', 'Created', 'IsNewest', 'AppId'];
+    const lines = [header.join(',')];
+    for (const p of appverSelectedApp.packages) {
+      lines.push([
+        appverSelectedApp.app, p.version,
+        p.assigned ? (p.intents.join(' / ') || 'Assigned') : 'Unassigned',
+        p.created || '', p.isNewest ? 'yes' : 'no', p.id,
+      ].map(escCsv).join(','));
+    }
+    blob(lines.join('\n'), 'app-versions-' + appverSelectedApp.app.replace(/[^a-z0-9-]/gi, '_').slice(0, 40) + '.csv');
+  } else {
+    const header = ['App', 'Publisher', 'Packages', 'Newest version', 'Assigned', 'Unassigned', 'Surplus', 'Platform'];
+    const lines = [header.join(',')];
+    for (const a of appverFiltered) {
+      lines.push([a.app, a.publisher, a.versionCount, a.newest, a.assignedCount, a.unassignedCount, a.surplus, a.platform].map(escCsv).join(','));
+    }
+    blob(lines.join('\n'), 'app-versions.csv');
+  }
+}
+
+$('btnAppverRefresh').addEventListener('click', () => loadAppversions(true));
+$('btnAppverExport').addEventListener('click', exportAppverCSV);
+$('appverFilter').addEventListener('input', applyAppverFilter);
+$('appverDupesOnly').addEventListener('change', renderAppverTab);
+$('btnAppverDrillBack').addEventListener('click', showAppverAppsView);
+
+$('kAppverMultiTile').addEventListener('click', () => {
+  appverTileFilter = appverTileFilter === 'multi' ? null : 'multi';
+  renderAppverTab();
+});
+$('kAppverSurplusTile').addEventListener('click', () => {
+  appverTileFilter = appverTileFilter === 'surplus' ? null : 'surplus';
+  renderAppverTab();
+});
+$('kAppverUnassignedTile').addEventListener('click', () => {
+  appverTileFilter = appverTileFilter === 'unassigned' ? null : 'unassigned';
+  renderAppverTab();
+});
+$('btnAppverClearKpi').addEventListener('click', () => {
+  appverTileFilter = null;
+  renderAppverTab();
+});
+$('kAppverWorstTile').addEventListener('click', () => {
+  const key = $('kAppverWorstTile').dataset.appverKey;
+  if (key) openAppverDrilldown(key);
+});
+
+$('appverAppRows').addEventListener('click', e => {
+  const tr = e.target.closest('tr[data-appver-key]');
+  if (!tr) return;
+  openAppverDrilldown(tr.dataset.appverKey);
+});
+
+$('appverDrillRows').addEventListener('click', e => {
+  const del = e.target.closest('.appver-del');
+  if (!del || !appverSelectedApp) return;
+  const pkg = appverSelectedApp.packages.find(p => p.id === del.dataset.appverPkg);
+  if (pkg) openDeleteModal({ id: pkg.id, displayName: pkg.displayName, publisher: pkg.publisher });
+});
+
+// Checkbox selection in the drill view
+$('appverDrillRows').addEventListener('change', e => {
+  const cb = e.target.closest('[data-apv-select]');
+  if (!cb) return;
+  if (cb.checked) apvSelected.add(cb.dataset.apvSelect);
+  else apvSelected.delete(cb.dataset.apvSelect);
+  renderAppverDrillRows();
+});
+$('apvSelectAll').addEventListener('change', () => {
+  if (!appverSelectedApp) return;
+  const all = $('apvSelectAll').checked;
+  appverSelectedApp.packages.forEach(p => { if (all) apvSelected.add(p.id); else apvSelected.delete(p.id); });
+  renderAppverDrillRows();
+});
+$('btnAppverDeleteSel').addEventListener('click', deleteSelectedAppverPackages);
+
+// Bulk-delete the selected packages from the Intune catalog. Same MAA
+// prompt→retry→queue pattern as deleteSelectedCerthealthDevices: one
+// justification is reused for the whole batch; 412/409 means the delete was
+// queued for an approver, not executed. Existing installs on devices are not
+// uninstalled — Intune just stops managing the package.
+async function deleteSelectedAppverPackages() {
+  if (!appverSelectedApp) return;
+  const targets = appverSelectedApp.packages.filter(p => apvSelected.has(p.id));
+  if (!targets.length) return;
+  const names = targets.map(p => `${p.displayName}${p.version ? ' ' + p.version : ''}`);
+  const preview = names.slice(0, 10).map(n => '  • ' + n).join('\n');
+  const more = names.length > 10 ? `\n  …and ${names.length - 10} more` : '';
+  if (!confirm(`Permanently delete ${names.length} package${names.length === 1 ? '' : 's'} from Intune?\n\n${preview}${more}\n\nExisting installs on devices are not uninstalled, but Intune stops managing and reporting on them. This cannot be undone from the dashboard.`)) return;
+
+  const btn = $('btnAppverDeleteSel');
+  btn.style.pointerEvents = 'none';
+  let token;
+  try {
+    token = await ensureScopeToken('DeviceManagementApps.ReadWrite.All');
+  } catch (e) {
+    $('appversionsError').innerHTML = `<div class="error-banner">Consent for app deletion was not granted: ${esc(e.message || String(e))}</div>`;
+    btn.style.pointerEvents = '';
+    return;
+  }
+
+  let maaJustB64 = null;
+  let maaJust = null;
+  let cancelled = false;
+  const deleted = [], queued = [], failed = [];
+  for (let i = 0; i < targets.length; i++) {
+    const p = targets[i];
+    btn.textContent = `🗑 Deleting ${i + 1}/${targets.length}…`;
+    const attempt = (headers = {}) => graphDelete('beta/deviceAppManagement/mobileApps/' + encodeURIComponent(p.id), { token, headers });
+    try {
+      await attempt(maaJustB64 ? { 'x-msft-approval-justification': maaJustB64 } : {});
+      deleted.push(p);
+    } catch (e) {
+      if (e.isMaa && !maaJustB64) {
+        const just = prompt(`Multi-Admin Approval is required in this tenant. Enter one justification for deleting ${targets.length === 1 ? `"${names[0]}"` : `these ${targets.length} packages`} (recorded in the audit log; ≤ 1024 chars):`);
+        if (!just) { cancelled = true; break; }
+        maaJust = just;
+        maaJustB64 = btoa(String.fromCharCode(...new TextEncoder().encode(just)));
+        try {
+          await attempt({ 'x-msft-approval-justification': maaJustB64 });
+          deleted.push(p);
+        } catch (e2) {
+          if (e2.status === 412 || e2.status === 409) queued.push({ ...p, approvalCode: extractApprovalCode(e2.body) });
+          else failed.push({ p, error: e2.message || String(e2) });
+        }
+      } else if (e.status === 412 || e.status === 409) {
+        queued.push({ ...p, approvalCode: extractApprovalCode(e.body) });
+      } else {
+        failed.push({ p, error: e.message || String(e) });
+      }
+    }
+  }
+
+  btn.style.pointerEvents = '';
+  apvSelected.clear();
+
+  // MAA approver notification for queued deletes — one combined email, same
+  // pattern as the single-app delete flow. Non-blocking: mail failure must
+  // not affect the result banner.
+  if (queued.length) {
+    const groupName = appverSelectedApp.app;
+    try {
+      const account = msalApp && msalApp.getActiveAccount();
+      const upn = (account?.username || '').toLowerCase();
+      const allCustomers = loadCustomers();
+      const customer = allCustomers.find(c => (c.email || '').toLowerCase() === upn) || null;
+      const approvers = (customer && customer.approvers) || [];
+      if (approvers.length) {
+        await sendApprovalNotification({
+          app: {
+            displayName: queued.length === 1
+              ? `${queued[0].displayName}${queued[0].version ? ' ' + queued[0].version : ''}`
+              : `${queued.length} packages of ${groupName}: ${queued.map(q => q.version || q.id).join(', ')}`,
+            publisher: queued[0].publisher,
+            id: queued.map(q => q.id).join(', ')
+          },
+          approvalCode: queued.length === 1 ? queued[0].approvalCode : null,
+          justification: maaJust || '',
+          approvers,
+          customer,
+          requester: { name: account?.name || upn, email: upn }
+        });
+        logMailAttempt({ kind: 'maa', customer: customer.code, approvers, result: 'sent' });
+      }
+    } catch (mailErr) {
+      try { logMailAttempt({ kind: 'maa', approvers: [], result: 'failed', error: mailErr.message || String(mailErr) }); } catch (_) {}
+    }
+  }
+
+  const label = p => `${p.displayName}${p.version ? ' ' + p.version : ''}`;
+  const skipped = targets.length - deleted.length - queued.length - failed.length;
+  const parts = [];
+  if (deleted.length) parts.push(`✓ Deleted ${deleted.length}: ${deleted.map(label).join(', ')}`);
+  if (queued.length) parts.push(`⏳ ${queued.length} submitted for Multi-Admin Approval — approve under Tenant administration → Multi Admin Approval: ${queued.map(label).join(', ')}`);
+  if (failed.length) parts.push(`✗ ${failed.length} failed: ${failed.map(f => `${label(f.p)} (${f.error})`).join('; ')}`);
+  if (skipped > 0) parts.push(`${cancelled ? 'Justification cancelled — ' : ''}${skipped} package${skipped === 1 ? '' : 's'} not attempted.`);
+  const cls = (failed.length || cancelled) ? 'error-banner' : 'notice-banner';
+
+  // Refresh the catalog for fresh truth (this returns to the apps list, same
+  // as the single-delete flow), then show the banner — loadAppversions clears
+  // the error div on entry, so the banner must be written after it finishes.
+  // Nothing hard-deleted (all queued/failed): stay in the drill view, just
+  // re-render to clear the checkboxes and reset the button label.
+  if (deleted.length) await loadAppversions(true);
+  else renderAppverDrillRows();
+  $('appversionsError').innerHTML = parts.length ? `<div class="${cls}">${parts.map(x => esc(x)).join('<br>')}</div>` : '';
+}
+
+document.querySelectorAll('[data-sort-appver]').forEach(th => {
+  th.addEventListener('click', () => {
+    const k = th.dataset.sortAppver;
+    if (appverSortKey === k) {
+      appverSortDir = appverSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      appverSortKey = k;
+      appverSortDir = ['versionCount', 'assignedCount', 'unassignedCount', 'newest'].includes(k) ? 'desc' : 'asc';
+    }
+    sortAppverRows();
+    renderAppverRows();
+  });
+});
+
+document.querySelectorAll('[data-sort-appver-drill]').forEach(th => {
+  th.addEventListener('click', () => {
+    const k = th.dataset.sortAppverDrill;
+    if (appverDrillSortKey === k) {
+      appverDrillSortDir = appverDrillSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      appverDrillSortKey = k;
+      appverDrillSortDir = ['version', 'created', 'assigned'].includes(k) ? 'desc' : 'asc';
+    }
+    renderAppverDrillRows();
+  });
+});
+
+// ============================================================
+// Proactive Remediation auto-deploy (shared by Software Metering
+// and the AI Agent Scan). One-click "create + assign" against the
+// active tenant. Requires DeviceManagementScripts.ReadWrite.All
+// (write scope; triggers re-consent first time). Idempotent:
+// detects displayName collision and offers to reuse. mdMode picks
+// which script the modal deploys; everything else is shared.
+// ============================================================
+
+const MD_DEFAULT_DESCRIPTION = `Agentless software metering. Collects per-user application last-execution data from Windows BAM (Background Activity Moderator) and reports a gzip+base64-encoded snapshot via the detection script's stdout channel. Read by THE Intune Dashboard's Software Metering sub-tab to surface idle-90d+ and never-launched installs for license reclamation. Always exits 0; never triggers a remediation.
+
+Privacy: only the first INITIAL of the username is sent. No window titles, document names, URLs, or file paths are collected. Only integer days-since-last-use is transmitted (no exact timestamps).
+
+Per-run progress is logged to:
+C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneDashboard-SoftwareMetering.log
+
+Source / setup: github.com/haavarstein/intune-dashboard`;
+
+const MD_SCRIPT_PATH = 'scripts/software-metering-detect.ps1';
+
+const AI_SCAN_SCRIPT_NAME = 'THE Intune Dashboard - AI Agent Scan';
+const AI_SCAN_DESCRIPTION = `Agentless AI-agent discovery (shadow-AI inventory). Scans every user profile and the machine for locally installed AI agents — Claude Code, Codex CLI, Gemini CLI, GitHub Copilot CLI, Grok Build, Claude/ChatGPT/Ollama/LM Studio/Poe desktop apps, Cursor, Windsurf, Cline, Roo Code, Continue, Aider, OpenCode, OpenClaw, Hermes Agent — via WinGet packages, npm globals, desktop-app folders, VS Code extensions, agent config directories, machine-wide installs, and running processes. Reports a gzip+base64-encoded snapshot via the detection script's stdout channel; read by THE Intune Dashboard's AI agents sub-tab as the fleet-scan fallback until Microsoft Defender's agent-discovery preview is enabled by default. Always exits 0; never triggers a remediation.
+
+Privacy: agent name, vendor, version, profile USERNAME, detection channel, and integer days-since-install only. No file contents, prompts, or document names are collected.
+
+Per-run progress is logged to:
+C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneDashboard-AiAgentScan.log
+
+Source / setup: github.com/haavarstein/intune-dashboard`;
+
+const MD_MODES = {
+  metering: {
+    title: 'Auto-deploy Software Metering script',
+    name: 'THE Intune Dashboard - Software Metering',
+    description: MD_DEFAULT_DESCRIPTION,
+    scriptPath: MD_SCRIPT_PATH,
+    idField: 'meteringScriptId',
+    label: 'metering script',
+    bannerEl: 'meteringError',
+    afterDeploy: () => { meteringLoaded = false; loadMetering(true); }
+  },
+  aiscan: {
+    title: 'Auto-deploy AI Agent Scan script',
+    name: AI_SCAN_SCRIPT_NAME,
+    description: AI_SCAN_DESCRIPTION,
+    scriptPath: 'scripts/ai-agent-detect.ps1',
+    idField: 'aiScanScriptId',
+    label: 'AI agent scan script',
+    bannerEl: 'aiagentsError',
+    afterDeploy: () => { aiagentsLoaded = false; loadAiAgents(true); }
+  }
+};
+let mdMode = 'metering';
+const mdScriptCache = {};   // scriptPath -> { text, b64 }
+
+let mdScriptText = null;
+let mdScriptB64 = null;
+let mdSelectedGroup = null;
+let mdSearchTimer = null;
+let mdDeploying = false;
+let mdExistingScriptId = null;
+
+async function openMeteringDeployModal(mode) {
+  // Guard: addEventListener passes the click event as the first arg.
+  mdMode = MD_MODES[mode] ? mode : 'metering';
+  const cfg = MD_MODES[mdMode];
+  const customer = loadCustomers().find(c => c.code === getActiveCustomerCode());
+  if (!customer) {
+    alert('No customer matched the signed-in account. Sign in via the Multi-Customer dropdown or add a customer in Settings.');
+    return;
+  }
+  $('mdTitle').textContent = cfg.title;
+  $('mdSubtitle').textContent = `Tenant: ${customer.code} (${customer.email})`;
+  $('mdName').value = cfg.name;
+  $('mdPublisher').value = 'THE Intune Dashboard';
+  $('mdDescription').value = cfg.description;
+  $('mdScheduleTime').value = '03:00';
+  $('mdGroupSearch').value = '';
+  $('mdGroupResults').style.display = 'none';
+  $('mdGroupSelected').style.display = 'none';
+  $('mdError').style.display = 'none';
+  $('mdError').innerHTML = '';
+  $('mdConflict').style.display = 'none';
+  $('mdScriptPreview').textContent = 'Loading…';
+  $('mdScriptSize').textContent = 'loading…';
+  mdSelectedGroup = null;
+  mdExistingScriptId = null;
+  document.querySelector('input[name="mdTarget"][value="group"]').checked = true;
+  syncMdGroupRow();
+  $('meteringDeployModal').classList.add('show');
+
+  try {
+    if (!mdScriptCache[cfg.scriptPath]) {
+      const res = await fetch(cfg.scriptPath);
+      if (!res.ok) throw new Error(`fetch ${cfg.scriptPath} returned ${res.status}`);
+      const text = await res.text();
+      const enc = new TextEncoder().encode(text);
+      let binary = '';
+      for (let i = 0; i < enc.length; i++) binary += String.fromCharCode(enc[i]);
+      mdScriptCache[cfg.scriptPath] = { text, b64: btoa(binary) };
+    }
+    mdScriptText = mdScriptCache[cfg.scriptPath].text;
+    mdScriptB64 = mdScriptCache[cfg.scriptPath].b64;
+    const lineCount = mdScriptText.split('\n').length;
+    const byteSize = new TextEncoder().encode(mdScriptText).length;
+    $('mdScriptSize').textContent = `${lineCount} lines · ${(byteSize / 1024).toFixed(1)} KB`;
+    $('mdScriptPreview').textContent = mdScriptText;
+  } catch (e) {
+    mdScriptText = null;
+    mdScriptB64 = null;
+    $('mdScriptPreview').textContent = '';
+    $('mdScriptSize').textContent = 'failed';
+    showMdError(`Could not fetch the script content from "${cfg.scriptPath}". Local file:// origins typically block sibling fetches — serve the dashboard via an HTTP server (or use the production GitHub Pages URL) and reopen this modal. Manual upload is the fallback.`);
+  }
+}
+
+function closeMeteringDeployModal() {
+  if (mdDeploying) return;
+  $('meteringDeployModal').classList.remove('show');
+}
+
+function showMdError(msg) {
+  $('mdError').innerHTML = `<div class="error-banner">${esc(msg)}</div>`;
+  $('mdError').style.display = '';
+}
+
+function syncMdGroupRow() {
+  const tgt = document.querySelector('input[name="mdTarget"]:checked').value;
+  $('mdGroupRow').style.opacity = tgt === 'group' ? '1' : '0.35';
+  $('mdGroupRow').style.pointerEvents = tgt === 'group' ? '' : 'none';
+}
+
+async function searchGroupsForMeteringDeploy(query) {
+  const box = $('mdGroupResults');
+  if (!query || query.length < 2) {
+    box.style.display = 'none';
+    return;
+  }
+  try {
+    const term = `"displayName:${query.replace(/"/g, '')}"`;
+    const path = `v1.0/groups?$search=${encodeURIComponent(term)}&$top=50&$select=id,displayName,description&$count=true`;
+    const data = await graphGet(path, { headers: { ConsistencyLevel: 'eventual' } });
+    const groups = data.value || [];
+    const totalCount = data['@odata.count'];
+    const truncNote = (typeof totalCount === 'number' && totalCount > groups.length)
+      ? `<div class="meta" style="padding:8px 10px; font-size:11px;">Showing first ${groups.length} of ${totalCount} matches — refine your search to narrow down.</div>`
+      : '';
+    if (!groups.length) {
+      box.innerHTML = `<div class="meta" style="padding:10px;">No groups match "${esc(query)}"</div>`;
+    } else {
+      box.innerHTML = truncNote + groups.map(g => `
+        <div data-md-group-id="${esc(g.id)}" data-md-group-name="${esc(g.displayName)}" style="padding:8px 10px; cursor:pointer; border-bottom:1px solid var(--line);">
+          <div style="font-size:13px;">${esc(g.displayName)}</div>
+          <div style="font-size:11px; color:var(--muted);">${esc(g.description || g.id)}</div>
+        </div>
+      `).join('');
+      box.querySelectorAll('[data-md-group-id]').forEach(row => {
+        row.addEventListener('click', () => selectMeteringDeployGroup({ id: row.dataset.mdGroupId, displayName: row.dataset.mdGroupName }));
+        row.addEventListener('mouseenter', () => row.style.background = 'var(--accent-soft)');
+        row.addEventListener('mouseleave', () => row.style.background = '');
+      });
+    }
+    box.style.display = '';
+  } catch (e) {
+    box.innerHTML = `<div style="padding:10px; color:#c0392b; font-size:12px;">Search failed: ${esc(e.message || String(e))}</div>`;
+    box.style.display = '';
+  }
+}
+
+function selectMeteringDeployGroup(g) {
+  mdSelectedGroup = g;
+  $('mdGroupSearch').value = '';
+  $('mdGroupResults').style.display = 'none';
+  $('mdGroupSelected').style.display = '';
+  $('mdGroupSelected').innerHTML = `Selected: <strong>${esc(g.displayName)}</strong> <span style="color:var(--muted); font-family:ui-monospace,monospace; font-size:11px;">${esc(g.id)}</span>`;
+}
+
+// JIT consent for the remediation-script write scope. Returns the write token —
+// callers must pass it to graphPost/Patch/Delete via opts.token, since the
+// default getToken() mints from the read-only SCOPES array.
+function ensureMeteringWriteConsent() {
+  return ensureScopeToken('DeviceManagementScripts.ReadWrite.All');
+}
+
+// Directory.AccessAsUser.All is requested just-in-time so list-only viewers
+// aren't prompted at sign-in.
+function ensureDirectoryWriteConsent() {
+  return ensureScopeToken('Directory.AccessAsUser.All');
+}
+
+async function restoreDeletedDevice(id) {
+  const token = await ensureDirectoryWriteConsent();
+  const res = await fetch(
+    `https://graph.microsoft.com/beta/directory/deletedItems/${encodeURIComponent(id)}/restore`,
+    {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: '{}'
+    }
+  );
+  if (res.status === 404) return null;  // already restored / aged out — treat as success
+  if (!res.ok) {
+    const body = await res.text();
+    const err = new Error('Graph ' + res.status + ': ' + body);
+    err.status = res.status;
+    err.body = body;
+    throw err;
+  }
+  if (res.status === 204) return null;
+  const text = await res.text();
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { return null; }
+}
+
+async function onRestoreClick(btn) {
+  if (btn.disabled) return;
+  const id = btn.dataset.restoreId;
+  const name = btn.dataset.restoreName;
+  btn.disabled = true;
+  const originalLabel = btn.textContent;
+  btn.textContent = 'Restoring…';
+  try {
+    await restoreDeletedDevice(id);
+    sdDevices = sdDevices.filter(d => d.id !== id);
+    const row = btn.closest('tr');
+    if (row) row.remove();
+    $('sdCount').textContent = sdDevices.length;
+    if (!sdDevices.length) {
+      $('sdRows').innerHTML = '<tr><td colspan="8" class="empty">No soft-deleted devices. Anything deleted in the last 30 days will appear here.</td></tr>';
+    }
+    $('sdNotice').innerHTML =
+      `<div class="notice-banner">✓ Restored <strong>${esc(name)}</strong>. It should reappear in Entra and re-link to its Intune managed-device record within a few minutes.</div>`;
+    setTimeout(() => { const n = $('sdNotice'); if (n) n.innerHTML = ''; }, 8000);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+    const roleHint = e.status === 403
+      ? ' You need Cloud Device Administrator, Intune Administrator, or Global Administrator.'
+      : '';
+    $('sdError').innerHTML =
+      `<div class="error-banner">Restore failed for <strong>${esc(name)}</strong>: ${esc(e.message || e)}${roleHint}</div>`;
+  }
+}
+
+async function confirmMeteringDeploy() {
+  if (mdDeploying) return;
+  $('mdError').style.display = 'none';
+  $('mdConflict').style.display = 'none';
+
+  const name = ($('mdName').value || '').trim();
+  const publisher = ($('mdPublisher').value || '').trim();
+  const description = ($('mdDescription').value || '').trim();
+  const targetType = document.querySelector('input[name="mdTarget"]:checked').value;
+  const timeStr = ($('mdScheduleTime').value || '').trim();
+
+  if (!name) return showMdError('Name is required.');
+  if (!publisher) return showMdError('Publisher is required.');
+  if (!mdScriptB64) return showMdError('Script content not loaded yet — try reopening the modal once it loads, or upload manually.');
+  if (targetType === 'group' && !mdSelectedGroup) return showMdError('Pick a group or switch to "All Devices".');
+  if (!/^[0-2]?\d:[0-5]\d$/.test(timeStr)) return showMdError('Schedule time must be HH:MM (24-hour).');
+
+  const customer = loadCustomers().find(c => c.code === getActiveCustomerCode());
+  if (!customer) return showMdError('No customer matched.');
+
+  mdDeploying = true;
+  const btn = $('mdBtnDeploy');
+  btn.disabled = true;
+  btn.textContent = 'Consent…';
+
+  try {
+    const writeToken = await ensureMeteringWriteConsent();
+    btn.textContent = 'Checking…';
+    const filter = `displayName eq '${name.replace(/'/g, "''")}'`;
+    const existing = await graphGet(`beta/deviceManagement/deviceHealthScripts?$filter=${encodeURIComponent(filter)}&$select=id,displayName`);
+    const existingValue = (existing && existing.value) || [];
+    if (existingValue.length) {
+      mdExistingScriptId = existingValue[0].id;
+      $('mdConflictDetail').textContent = `Existing script ID: ${mdExistingScriptId}. "Reuse existing" just fills the ID into Settings — no new script is created, no new assignment is made. "Delete existing and create new" deletes the script in Intune (and its assignment) then re-runs this Auto-deploy from scratch — use this when you want a clean redeploy of the same name. "Rename and create new" lets you change the name and try again.`;
+      $('mdConflict').style.display = '';
+      btn.disabled = false;
+      btn.textContent = 'Deploy';
+      mdDeploying = false;
+      return;
+    }
+
+    btn.textContent = 'Creating…';
+    const createBody = {
+      displayName: name,
+      description: description,
+      publisher: publisher,
+      detectionScriptContent: mdScriptB64,
+      runAsAccount: 'system',
+      runAs32Bit: false,
+      enforceSignatureCheck: false,
+      roleScopeTagIds: ['0'],
+    };
+
+    // Multi-Admin Approval handling: if the tenant requires MAA, the first
+    // POST returns 400 "Header 'x-msft-approval-justification' is required".
+    // We prompt once, retry with the header. A retry that returns 412/409
+    // means the request was queued for an approver; treat as success-shaped
+    // and bail out with clear guidance (we can't proceed to assign until an
+    // admin approves the create).
+    let maaJust = null;
+    const postWithMaa = async (path, body, label) => {
+      try {
+        return { kind: 'ok', data: await graphPost(path, body, { token: writeToken }) };
+      } catch (e) {
+        if (e.isMaa || (e.status === 400 && /x-msft-approval-justification/.test(e.message))) {
+          if (!maaJust) {
+            maaJust = prompt(`Multi-Admin Approval is required in this tenant. Enter a justification for "${label}" (recorded in the audit log; ≤ 1024 chars):`);
+            if (!maaJust) throw new Error('Justification cancelled.');
+          }
+          try {
+            const data = await graphPost(path, body, { headers: { 'x-msft-approval-justification': btoa(maaJust) }, token: writeToken });
+            return { kind: 'ok', data };
+          } catch (e2) {
+            if (e2.status === 412 || e2.status === 409) return { kind: 'pending', error: e2 };
+            throw e2;
+          }
+        }
+        throw e;
+      }
+    };
+
+    const createResult = await postWithMaa('beta/deviceManagement/deviceHealthScripts', createBody, `create ${MD_MODES[mdMode].label}`);
+    if (createResult.kind === 'pending') {
+      $('mdError').innerHTML = `<div class="notice-banner"><strong>Submitted for Multi-Admin Approval.</strong> An admin must approve in <em>Tenant administration → Multi Admin Approval → Access requests</em>. Once approved, Intune creates the script automatically. After that, finish the deploy by either:<br><br>1. <strong>Re-running Auto-deploy</strong> here — the conflict modal will detect the now-created script and "Reuse existing" links the GUID; then create the assignment separately in Intune admin.<br><br>2. Or <strong>going to Intune admin → Devices → Scripts and remediations → [your script] → Properties</strong> to set the assignment manually.</div>`;
+      $('mdError').style.display = '';
+      return;
+    }
+    const scriptId = createResult.data.id;
+
+    btn.textContent = 'Assigning…';
+    const [hh, mm] = timeStr.split(':');
+    const target = targetType === 'all'
+      ? { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' }
+      : { '@odata.type': '#microsoft.graph.groupAssignmentTarget', groupId: mdSelectedGroup.id };
+    const assignBody = {
+      deviceHealthScriptAssignments: [{
+        target,
+        runRemediationScript: false,
+        runSchedule: {
+          '@odata.type': '#microsoft.graph.deviceHealthScriptDailySchedule',
+          interval: 1,
+          time: `${hh.padStart(2, '0')}:${mm}:00.0000000`,
+          useUtc: true,
+        },
+      }],
+    };
+    const assignResult = await postWithMaa(`beta/deviceManagement/deviceHealthScripts/${encodeURIComponent(scriptId)}/assign`, assignBody, `assign ${MD_MODES[mdMode].label}`);
+    if (assignResult.kind === 'pending') {
+      saveMeteringScriptIdToActiveCustomer(scriptId);
+      closeMeteringDeployModal();
+      showMeteringDeployedBanner(scriptId, '(created; assignment submitted for Multi-Admin Approval — devices will start reporting once an admin approves)');
+      return;
+    }
+
+    saveMeteringScriptIdToActiveCustomer(scriptId);
+    closeMeteringDeployModal();
+    showMeteringDeployedBanner(scriptId, targetType === 'all' ? 'All Devices' : mdSelectedGroup.displayName);
+    MD_MODES[mdMode].afterDeploy();
+  } catch (e) {
+    console.error('Auto-deploy failed', e);
+    showMdError(e.message || String(e));
+  } finally {
+    mdDeploying = false;
+    btn.disabled = false;
+    btn.textContent = 'Deploy';
+  }
+}
+
+function reuseExistingMeteringScript() {
+  if (!mdExistingScriptId) return;
+  saveMeteringScriptIdToActiveCustomer(mdExistingScriptId);
+  closeMeteringDeployModal();
+  showMeteringDeployedBanner(mdExistingScriptId, '(reused existing script — no new assignment created)');
+  MD_MODES[mdMode].afterDeploy();
+}
+
+// Hard-reset path for the "displayName collision but I just want a clean
+// redeploy" case (e.g. the old script lost its assignment, or local state
+// got out of sync). DELETEs the existing deviceHealthScript in Intune,
+// clears the collision marker, and re-enters confirmMeteringDeploy so the
+// usual create + assign flow runs from scratch under the same name.
+async function replaceExistingMeteringScript() {
+  if (!mdExistingScriptId) return;
+  if (mdDeploying) return;
+  const doomedId = mdExistingScriptId;
+  const btn = $('mdBtnReplace');
+  const reuseBtn = $('mdBtnReuse');
+  const renameBtn = $('mdBtnRename');
+  btn.disabled = true; reuseBtn.disabled = true; renameBtn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = 'Deleting…';
+  try {
+    await deleteWithMaa(`beta/deviceManagement/deviceHealthScripts/${encodeURIComponent(doomedId)}`, await ensureMeteringWriteConsent(), MD_MODES[mdMode].label);
+    mdExistingScriptId = null;
+    $('mdConflict').style.display = 'none';
+    // Drop the stale GUID locally too — if it happened to match what we
+    // just deleted, leaving it would mislead the next loadMetering call.
+    const customer = loadCustomers().find(c => c.code === getActiveCustomerCode());
+    if (customer && customer[MD_MODES[mdMode].idField] === doomedId) {
+      clearMeteringScriptIdForActiveCustomer(MD_MODES[mdMode].idField);
+    }
+    await confirmMeteringDeploy();
+  } catch (e) {
+    showMdError(`Could not delete existing script ${doomedId}: ${e.message || String(e)}`);
+    btn.disabled = false; reuseBtn.disabled = false; renameBtn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+function saveMeteringScriptIdToActiveCustomer(scriptId, idField) {
+  const field = idField || MD_MODES[mdMode].idField;
+  const customers = loadCustomers();
+  const code = getActiveCustomerCode();
+  const idx = customers.findIndex(c => c.code === code);
+  if (idx === -1) return;
+  customers[idx] = { ...customers[idx], [field]: scriptId };
+  saveCustomers(customers);
+}
+
+function showMeteringDeployedBanner(scriptId, target) {
+  const cfg = MD_MODES[mdMode];
+  $(cfg.bannerEl).innerHTML = `<div class="notice-banner" style="margin-bottom:14px;">✓ Deployed ${esc(cfg.label)} (ID: <code>${esc(scriptId)}</code>) to <strong>${esc(target)}</strong>. Devices will run it on the next Intune sync; data will appear here as soon as the first device check-in cycle completes (typically within 24 hours).</div>`;
+}
+
+$('btnMeteringDeploy').addEventListener('click', () => openMeteringDeployModal('metering'));
+$('btnMeteringRedeploy').addEventListener('click', () => openMeteringDeployModal('metering'));
+$('btnMeteringDeployClose').addEventListener('click', closeMeteringDeployModal);
+$('mdBtnCancel').addEventListener('click', closeMeteringDeployModal);
+$('mdBtnDeploy').addEventListener('click', confirmMeteringDeploy);
+$('mdBtnReuse').addEventListener('click', reuseExistingMeteringScript);
+$('mdBtnReplace').addEventListener('click', replaceExistingMeteringScript);
+$('mdBtnRename').addEventListener('click', () => {
+  $('mdConflict').style.display = 'none';
+  $('mdName').focus();
+  $('mdName').select();
+});
+$('mdGroupSearch').addEventListener('input', e => {
+  clearTimeout(mdSearchTimer);
+  const q = e.target.value.trim();
+  mdSearchTimer = setTimeout(() => searchGroupsForMeteringDeploy(q), 300);
+});
+document.querySelectorAll('input[name="mdTarget"]').forEach(r => r.addEventListener('change', syncMdGroupRow));
+$('meteringDeployModal').addEventListener('click', e => {
+  if (e.target.id === 'meteringDeployModal' && !mdDeploying) closeMeteringDeployModal();
+});
+
+// ============================================================
+// IME Required App Check-in remediation (Rudy Ooms / Call4Cloud)
+// ------------------------------------------------------------
+// This is an ON-DEMAND, device-of-choice tool — NOT a scheduled /
+// group-assigned Proactive Remediation rollout. Intune has no API
+// to run an arbitrary script on a single device ad-hoc; the only
+// path is initiateOnDemandProactiveRemediation, which needs a
+// deviceHealthScript to exist by ID. So we create that script ONCE,
+// unassigned (no group, no schedule), the first time a check-in is
+// run, store its ID per customer (imeCheckinScriptId), and from then
+// on every check-in just points the existing remediation at the
+// chosen device. Devices are chosen via the picker in the Remediation
+// tab or the per-row "⚡ Check-in" buttons (Hardware/Failed/Cert).
+// https://github.com/call4cloud-code/Required-App-Checkin-public
+// ============================================================
+const IME_DETECT_PATH = 'scripts/ime-required-app-checkin-detect.ps1';
+const IME_REMEDIATE_PATH = 'scripts/ime-required-app-checkin-remediate.ps1';
+const IME_SCRIPT_NAME = 'THE Intune Dashboard - IME Required App Check-in';
+const IME_SCRIPT_PUBLISHER = 'THE Intune Dashboard';
+const IME_SCRIPT_DESCRIPTION = `On-demand only (unassigned). Triggers the Intune Management Extension required+available app check-in via IStatusService.CheckInAsync — cuts the ~60-minute delay for required Win32 apps. Runs as the logged-on user (fails as SYSTEM). Based on Rudy Ooms / Call4Cloud's Required-App-Checkin. Created by THE Intune Dashboard to back its per-device "Check-in" action.`;
+
+let imeDetectB64 = null, imeRemediateB64 = null;
+let imeEnsuring = null;        // in-flight ensureImeRemediation() promise (dedupe concurrent clicks)
+let imePickerTimer = null;
+let imePickerDevice = null;    // { id, deviceName, userPrincipalName }
+
+function getActiveImeScriptId() {
+  const c = loadCustomers().find(c => c.code === getActiveCustomerCode());
+  return (c && c.imeCheckinScriptId) || '';
+}
+
+function saveImeScriptIdToActiveCustomer(scriptId) {
+  const customers = loadCustomers();
+  const idx = customers.findIndex(c => c.code === getActiveCustomerCode());
+  if (idx === -1) return;
+  customers[idx] = { ...customers[idx], imeCheckinScriptId: scriptId };
+  saveCustomers(customers);
+  if (typeof renderCustomersList === 'function') renderCustomersList();
+  renderRemediationImeStatus();
+}
+
+function clearImeScriptIdForActiveCustomer() {
+  const customers = loadCustomers();
+  const idx = customers.findIndex(c => c.code === getActiveCustomerCode());
+  if (idx === -1) return;
+  customers[idx] = { ...customers[idx], imeCheckinScriptId: undefined, imeCheckinScriptVersion: undefined };
+  saveCustomers(customers);
+  renderRemediationImeStatus();
+}
+
+function getActiveImeScriptVersion() {
+  const c = loadCustomers().find(c => c.code === getActiveCustomerCode());
+  return (c && c.imeCheckinScriptVersion) || '';
+}
+
+function saveImeScriptVersionToActiveCustomer(version) {
+  const customers = loadCustomers();
+  const idx = customers.findIndex(c => c.code === getActiveCustomerCode());
+  if (idx === -1) return;
+  customers[idx] = { ...customers[idx], imeCheckinScriptVersion: version };
+  saveCustomers(customers);
+}
+
+// Stable fingerprint of the local script content (detection + remediation).
+// Any edit to the .ps1 files changes this, which triggers an in-place PATCH of
+// the deployed remediation on the next check-in — no manual version bumping.
+function imeContentVersion() {
+  const s = (imeDetectB64 || '') + '|' + (imeRemediateB64 || '');
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(16);
+}
+
+function renderRemediationImeStatus() {
+  const el = $('remediationImeStatus');
+  if (!el) return;
+  const id = getActiveImeScriptId();
+  el.innerHTML = id
+    ? `Remediation ready for this customer (on-demand only, unassigned) · <code>${esc(id)}</code>`
+    : `No remediation in this tenant yet — it's created automatically (unassigned, no schedule) the first time you run a check-in.`;
+  loadImeRunActivity();
+}
+
+// On-demand remediation runs don't roll up into Intune's Endpoint analytics
+// report (it only aggregates *assigned* deployments), so we read the per-device
+// results directly to show real usage — otherwise an on-demand-only remediation
+// looks unused (Unassigned / 0). Read-only; uses DeviceManagementScripts.Read.All.
+let imeActivityScriptId = null;
+async function loadImeRunActivity(force) {
+  const el = $('remediationImeActivity');
+  if (!el) return;
+  const id = getActiveImeScriptId();
+  if (!id) { el.textContent = ''; imeActivityScriptId = null; return; }
+  if (!force && imeActivityScriptId === id) return; // already loaded for this script
+  imeActivityScriptId = id;
+  el.textContent = 'Checking on-demand run activity…';
+  try {
+    const data = await graphGet(`beta/deviceManagement/deviceHealthScripts/${encodeURIComponent(id)}/deviceRunStates?$expand=managedDevice($select=deviceName)&$top=200`);
+    const states = data.value || [];
+    if (!states.length) { el.textContent = 'No on-demand runs recorded yet for this remediation.'; return; }
+    const total = states.length;
+    const lastRun = states.reduce((m, s) => (s.lastStateUpdateDateTime && s.lastStateUpdateDateTime > m) ? s.lastStateUpdateDateTime : m, '');
+    const errs = states.filter(s => ['remediationFailed', 'scriptError', 'fail'].includes(s.remediationState) || s.remediationScriptError).length;
+    el.innerHTML = `⚙ Run on <strong>${total}</strong> device${total === 1 ? '' : 's'} on-demand`
+      + (lastRun ? ` · last ${new Date(lastRun).toLocaleString()}` : '')
+      + (errs ? ` · <span style="color:#8a2020;">${errs} with remediation errors</span>` : '');
+  } catch (e) {
+    el.textContent = '';
+    imeActivityScriptId = null; // allow retry next render
+    console.warn('IME run activity load failed', e);
+  }
+}
+
+// Lightweight toast for the fire-and-forget actions.
+function imeToast(msg, kind) {
+  let host = $('imeToastHost');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'imeToastHost';
+    host.style.cssText = 'position:fixed; right:18px; bottom:18px; z-index:9999; display:flex; flex-direction:column; gap:8px; max-width:440px;';
+    document.body.appendChild(host);
+  }
+  const t = document.createElement('div');
+  const bg = kind === 'bad' ? '#c0392b' : (kind === 'ok' ? '#1f7a3a' : '#333');
+  t.style.cssText = `background:${bg}; color:#fff; padding:10px 14px; border-radius:8px; font-size:13px; box-shadow:0 4px 14px rgba(0,0,0,.2); line-height:1.5;`;
+  t.textContent = msg;
+  host.appendChild(t);
+  setTimeout(() => { t.style.transition = 'opacity .4s'; t.style.opacity = '0'; setTimeout(() => t.remove(), 400); }, 6500);
+}
+
+// Fetch the two scripts from the scripts/ folder and base64-encode them (cached).
+async function loadImeScriptsB64() {
+  if (imeDetectB64 && imeRemediateB64) return;
+  const toB64 = (txt) => {
+    const enc = new TextEncoder().encode(txt);
+    let binary = '';
+    for (let i = 0; i < enc.length; i++) binary += String.fromCharCode(enc[i]);
+    return btoa(binary);
+  };
+  const [dRes, rRes] = await Promise.all([fetch(IME_DETECT_PATH), fetch(IME_REMEDIATE_PATH)]);
+  if (!dRes.ok || !rRes.ok) {
+    throw new Error(`Could not read the IME scripts from the "scripts/" folder (detection ${dRes.status}, remediation ${rRes.status}). Serve the dashboard over http:// — a file:// origin blocks these fetches.`);
+  }
+  imeDetectB64 = toB64(await dRes.text());
+  imeRemediateB64 = toB64(await rRes.text());
+}
+
+// The deviceHealthScript body (create + update share it). Always UNASSIGNED —
+// this is an on-demand tool, not a scheduled rollout.
+function imeScriptBody() {
+  return {
+    displayName: IME_SCRIPT_NAME,
+    description: IME_SCRIPT_DESCRIPTION,
+    publisher: IME_SCRIPT_PUBLISHER,
+    detectionScriptContent: imeDetectB64,
+    remediationScriptContent: imeRemediateB64,
+    runAsAccount: 'user',        // logged-on user — required for IStatusService
+    runAs32Bit: false,           // 64-bit PowerShell (per Call4Cloud README)
+    enforceSignatureCheck: false,
+    roleScopeTagIds: ['0'],
+  };
+}
+
+// Run a deviceHealthScript write, transparently handling Multi-Admin Approval:
+// the first call 400s asking for a justification header; we prompt once, retry,
+// and surface a clear message if the tenant queues it for an approver.
+async function imeWrite(doCall) {
+  try { return await doCall({}); }
+  catch (e) {
+    if (e.isMaa || (e.status === 400 && /x-msft-approval-justification/.test(e.message))) {
+      const just = prompt('Multi-Admin Approval is required in this tenant for this change. Enter a justification (recorded in the audit log; ≤ 1024 chars):');
+      if (!just) throw new Error('Justification cancelled.');
+      try { return await doCall({ 'x-msft-approval-justification': btoa(just) }); }
+      catch (e2) {
+        if (e2.status === 412 || e2.status === 409) throw new Error('The change was submitted for Multi-Admin Approval — an admin must approve it under Tenant administration → Multi Admin Approval → Access requests, then run the check-in again.');
+        throw e2;
+      }
+    }
+    throw e;
+  }
+}
+
+// Delete a deviceHealthScript with Multi-Admin Approval handling. First attempt
+// has no justification header; if the tenant requires MAA (400 / isMaa), prompt
+// once and retry. A 412/409 on the retry means the request was queued — surface
+// a clear message so the admin knows to check the MAA queue.
+async function deleteWithMaa(path, token, label) {
+  const attempt = (extraHeaders = {}) => graphDelete(path, { headers: extraHeaders, token });
+  try {
+    return await attempt();
+  } catch (e) {
+    if (e.isMaa || (e.status === 400 && /x-msft-approval-justification/.test(e.message))) {
+      const just = prompt(`Multi-Admin Approval is required in this tenant. Enter a justification for deleting "${label}" (recorded in the audit log; ≤ 1024 chars):`);
+      if (!just) throw new Error('Justification cancelled.');
+      try {
+        return await attempt({ 'x-msft-approval-justification': btoa(just) });
+      } catch (e2) {
+        if (e2.status === 412 || e2.status === 409)
+          throw new Error('The delete was submitted for Multi-Admin Approval — an admin must approve it under Tenant administration → Multi Admin Approval → Access requests.');
+        throw e2;
+      }
+    }
+    throw e;
+  }
+}
+
+// Return the deviceHealthScript ID to run on-demand. Creates it once if needed
+// (reusing a same-named script idempotently), and — if the local scripts have
+// changed since it was deployed — PATCHes the content in place so edits to the
+// .ps1 files self-deploy without a manual delete/recreate. Handles consent + MAA.
+async function ensureImeRemediation() {
+  if (imeEnsuring) return imeEnsuring;
+
+  imeEnsuring = (async () => {
+    const writeToken = await ensureMeteringWriteConsent(); // DeviceManagementScripts.ReadWrite.All
+    await loadImeScriptsB64();
+    const localVersion = imeContentVersion();
+
+    // A stored ID + matching fingerprint is NOT proof the script still exists —
+    // the admin may have deleted it in Intune. Always VERIFY it's live before
+    // handing the ID to the on-demand run, or initiateOnDemand 404s on a dead
+    // scriptPolicyId (the exact symptom we chased). Verify → up-to-date returns,
+    // drifted PATCHes, missing recreates.
+    const storedId = getActiveImeScriptId();
+    if (storedId) {
+      let live = true;
+      try {
+        await graphGet(`beta/deviceManagement/deviceHealthScripts/${encodeURIComponent(storedId)}?$select=id`);
+      } catch (e) {
+        if (e.status === 404) live = false; else throw e;
+      }
+      if (live) {
+        if (getActiveImeScriptVersion() === localVersion) return storedId; // exists + current
+        // exists but content drifted → PATCH it in place.
+        try {
+          await imeWrite(h => graphPatch(`beta/deviceManagement/deviceHealthScripts/${encodeURIComponent(storedId)}`, imeScriptBody(), { headers: h, token: writeToken }));
+          saveImeScriptVersionToActiveCustomer(localVersion);
+          imeToast('↻ Updated the IME remediation script in this tenant to the latest version.', 'ok');
+          remediationLoaded = false;
+          if (typeof loadRemediation === 'function') loadRemediation(true);
+          return storedId;
+        } catch (e) {
+          if (e.status !== 404) throw e;
+          // raced deletion between GET and PATCH → fall through to recreate
+        }
+      } else {
+        imeToast('The IME remediation was missing in Intune (deleted?) — recreating it…', 'info');
+      }
+      clearImeScriptIdForActiveCustomer(); // gone in Intune → recreate below
+    }
+
+    // No (valid) stored ID → reuse a same-named script if present (and bring it current), else create.
+    const filter = `displayName eq '${IME_SCRIPT_NAME.replace(/'/g, "''")}'`;
+    const found = await graphGet(`beta/deviceManagement/deviceHealthScripts?$filter=${encodeURIComponent(filter)}&$select=id,displayName`);
+    const hit = (found && found.value || [])[0];
+    if (hit) {
+      try { await imeWrite(h => graphPatch(`beta/deviceManagement/deviceHealthScripts/${encodeURIComponent(hit.id)}`, imeScriptBody(), { headers: h, token: writeToken })); } catch (_) { /* best-effort refresh */ }
+      saveImeScriptIdToActiveCustomer(hit.id);
+      saveImeScriptVersionToActiveCustomer(localVersion);
+      return hit.id;
+    }
+
+    const data = await imeWrite(h => graphPost('beta/deviceManagement/deviceHealthScripts', imeScriptBody(), { headers: h, token: writeToken }));
+    saveImeScriptIdToActiveCustomer(data.id);
+    saveImeScriptVersionToActiveCustomer(localVersion);
+    remediationLoaded = false;
+    if (typeof loadRemediation === 'function') loadRemediation(true);
+    return data.id;
+  })();
+
+  try { return await imeEnsuring; }
+  finally { imeEnsuring = null; }
+}
+
+// Mint a token for the privileged managed-device action scope, requested
+// just-in-time so list-only viewers aren't prompted at sign-in.
+function ensurePrivilegedOpsToken() {
+  return ensureScopeToken('DeviceManagementManagedDevices.PrivilegedOperations.All');
+}
+
+// Run an on-demand IME required-app check-in on one chosen device. Auto-creates
+// the (unassigned) remediation on first use. Used by the Remediation-tab picker
+// and the per-row "⚡ Check-in" buttons (Hardware / Failed Install) plus the
+// Management health tab's Health Assessment panel.
+async function forceImeCheckin(deviceId, deviceName, triggerEl) {
+  if (!deviceId) { imeToast('This row has no Intune device ID, so on-demand check-in is unavailable.', 'bad'); return; }
+  if (!loadCustomers().find(c => c.code === getActiveCustomerCode())) {
+    imeToast('No customer matched the signed-in account — add/select one in Settings first.', 'bad');
+    return;
+  }
+  const label = deviceName || deviceId;
+
+  const original = triggerEl ? triggerEl.textContent : null;
+  const setBusy = (txt) => { if (triggerEl) { triggerEl.textContent = txt; triggerEl.style.pointerEvents = 'none'; } };
+  const restore = () => { if (triggerEl) { triggerEl.textContent = original; triggerEl.style.pointerEvents = ''; } };
+
+  // Acquire the privileged-ops token FIRST, before any confirm() or network
+  // work — MSAL's consent popup must open within the click's transient user
+  // activation, which a blocking confirm dialog or the round-trips in
+  // ensureImeRemediation() would otherwise burn (→ popup_window_error). After
+  // first consent this resolves silently, so the confirm still comes first on
+  // every subsequent run.
+  setBusy('⏳ …');
+  let token;
+  try {
+    token = await ensurePrivilegedOpsToken();
+  } catch (e) {
+    console.error('IME check-in consent failed', e);
+    restore();
+    const popupBlocked = /popup/i.test(e.message || '') || e.errorCode === 'popup_window_error';
+    imeToast(popupBlocked
+      ? `Sign-in popup was blocked by the browser. Allow popups for this site, then click ⚡ Check-in again.`
+      : `Consent failed: ${e.message || e}`, 'bad');
+    return;
+  }
+
+  if (!confirm(`Run an IME required-app check-in on "${label}"?\n\nRuns the remediation on-demand against this one device (initiateOnDemandProactiveRemediation). The device must be ONLINE and reachable by Intune via Windows Push (WNS) at this moment — on-demand runs are NOT queued for offline devices. A user must also be signed in for the IME check-in to take effect.\n\nFirst run in this tenant also creates the remediation (unassigned, no schedule).`)) {
+    restore();
+    return;
+  }
+
+  try {
+    const scriptId = await ensureImeRemediation();
+    const runOnce = () => fetch(
+      `https://graph.microsoft.com/beta/deviceManagement/managedDevices/${encodeURIComponent(deviceId)}/initiateOnDemandProactiveRemediation`,
+      { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ scriptPolicyId: scriptId }) }
+    );
+    let res = await runOnce();
+    // A just-created remediation can take a few seconds to propagate to the
+    // device-side service, which 404s until it lands. Retry once after a pause.
+    if (res.status === 404) {
+      setBusy('⏳ retrying…');
+      await new Promise(r => setTimeout(r, 5000));
+      res = await runOnce();
+    }
+    if (!res.ok && res.status !== 204) { const t = await res.text(); const err = new Error('Graph ' + res.status + ': ' + t); err.status = res.status; throw err; }
+    imeToast(`✓ Check-in sent to ${label}. If the device is online it runs within ~10s; results report back shortly.`, 'ok');
+    if (triggerEl) { triggerEl.textContent = '✓ Sent'; setTimeout(restore, 4000); }
+    loadImeRunActivity(true); // results lag a few minutes, but refresh so the count catches up
+
+  } catch (e) {
+    console.error('Force IME check-in failed', e);
+    let hint = '';
+    if (/popup/i.test(e.message || '')) hint = ' Allow popups for this site and try again.';
+    else if (e.status === 403) hint = ' You need Intune Administrator (or a role with managed-device privileged operations).';
+    else if (e.status === 404) hint = ' If the remediation was just (re)created, wait ~30s and click again — it takes a moment to propagate. Otherwise: on-demand runs are NOT queued, so the device must be online and reachable via Windows Push (WNS) right now — force a sync on it (Settings → Accounts → Access work or school → Sync) and retry. Only one Run-remediation can be in flight per device at a time.';
+    imeToast(`Check-in failed for ${label}: ${e.message || e}${hint}`, 'bad');
+    restore();
+  }
+}
+
+// Delegated handler for every per-row "⚡ Check-in" affordance across the device tabs.
+document.addEventListener('click', e => {
+  const el = e.target.closest && e.target.closest('[data-ime-checkin]');
+  if (!el) return;
+  e.preventDefault();
+  forceImeCheckin(el.dataset.imeCheckin, el.dataset.imeName || '', el);
+});
+
+// ---- Remediation-tab device picker (search any Windows device, then Run) ----
+async function searchDevicesForIme(query) {
+  const box = $('imePickerResults');
+  if (!box) return;
+  if (!query || query.length < 2) { box.style.display = 'none'; return; }
+  try {
+    const q = query.replace(/'/g, "''");
+    const path = `beta/deviceManagement/managedDevices?$filter=${encodeURIComponent(`startswith(deviceName,'${q}')`)}&$top=25&$select=id,deviceName,userPrincipalName,operatingSystem,lastSyncDateTime`;
+    const data = await graphGet(path);
+    const devices = (data.value || []).filter(d => (d.operatingSystem || '').toLowerCase() === 'windows');
+    if (!devices.length) {
+      box.innerHTML = `<div class="meta" style="padding:10px;">No Windows devices start with "${esc(query)}"</div>`;
+    } else {
+      box.innerHTML = devices.map(d => `
+        <div data-ime-dev-id="${esc(d.id)}" data-ime-dev-name="${esc(d.deviceName || '')}" data-ime-dev-upn="${esc(d.userPrincipalName || '')}" style="padding:8px 10px; cursor:pointer; border-bottom:1px solid var(--line);">
+          <div style="font-size:13px;">${esc(d.deviceName || '(no name)')}</div>
+          <div style="font-size:11px; color:var(--muted);">${esc(d.userPrincipalName || 'no primary user')}${d.lastSyncDateTime ? ' · last sync ' + new Date(d.lastSyncDateTime).toLocaleDateString() : ''}</div>
+        </div>
+      `).join('');
+      box.querySelectorAll('[data-ime-dev-id]').forEach(row => {
+        row.addEventListener('click', () => selectImeDevice({ id: row.dataset.imeDevId, deviceName: row.dataset.imeDevName, userPrincipalName: row.dataset.imeDevUpn }));
+        row.addEventListener('mouseenter', () => row.style.background = 'var(--accent-soft)');
+        row.addEventListener('mouseleave', () => row.style.background = '');
+      });
+    }
+    box.style.display = '';
+  } catch (e) {
+    box.innerHTML = `<div style="padding:10px; color:#c0392b; font-size:12px;">Search failed: ${esc(e.message || String(e))}</div>`;
+    box.style.display = '';
+  }
+}
+
+function selectImeDevice(d) {
+  imePickerDevice = d;
+  $('imePickerSearch').value = d.deviceName || '';
+  $('imePickerResults').style.display = 'none';
+  const sel = $('imePickerSelected');
+  sel.style.display = '';
+  sel.innerHTML = `Selected: <strong>${esc(d.deviceName || '(no name)')}</strong> <span style="color:var(--muted);">${esc(d.userPrincipalName || 'no primary user')}</span>`;
+  $('btnImeRun').disabled = false;
+}
+
+if ($('imePickerSearch')) {
+  $('imePickerSearch').addEventListener('input', e => {
+    imePickerDevice = null;
+    $('btnImeRun').disabled = true;
+    $('imePickerSelected').style.display = 'none';
+    clearTimeout(imePickerTimer);
+    const q = e.target.value.trim();
+    imePickerTimer = setTimeout(() => searchDevicesForIme(q), 300);
+  });
+  $('btnImeRun').addEventListener('click', () => {
+    if (!imePickerDevice) return;
+    forceImeCheckin(imePickerDevice.id, imePickerDevice.deviceName, $('btnImeRun'));
+  });
+  document.addEventListener('click', e => {
+    if (!$('imePickerResults').contains(e.target) && e.target !== $('imePickerSearch')) {
+      $('imePickerResults').style.display = 'none';
+    }
+  });
+}
+
+// ============================================================
+// Approvals sub-tab — Multi-Admin Approval queue
+// GET /beta/deviceManagement/operationApprovalRequests (List)
+// POST .../{id}/approve and .../{id}/reject (Action)
+// All endpoints accept the DeviceManagementConfiguration.Read.All
+// scope which is already in SCOPES — no re-consent required.
+// ============================================================
+let approvalsLoaded = false;
+let approvalsRaw = [];
+let approvalsSortKey = 'requestDateTime';
+let approvalsSortDir = 'desc';
+const apSelected = new Set();
+const APPROVALS_TERMINAL = new Set(['approved', 'rejected', 'cancelled', 'expired', 'completed']);
+
+function approvalRequestor(r) {
+  return r?.requestor?.user?.displayName
+      || r?.requestor?.application?.displayName
+      || r?.requestor?.device?.displayName
+      || '—';
+}
+function approvalRequestorCell(r) {
+  const name = esc(approvalRequestor(r));
+  const userId = r?.requestor?.user?.id;
+  if (!userId) return name;
+  const url = `https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/overview/userId/${encodeURIComponent(userId)}`;
+  return `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${name}</a>`;
+}
+function approvalApprover(r) {
+  return r?.approver?.user?.displayName
+      || r?.approver?.application?.displayName
+      || r?.approver?.device?.displayName
+      || '';
+}
+function approvalType(r) {
+  const arr = r?.requiredOperationApprovalPolicyTypes;
+  if (Array.isArray(arr) && arr.length) return arr.join(', ');
+  return '—';
+}
+function approvalStatusBadge(status) {
+  const s = (status || '').toLowerCase();
+  const map = {
+    needsapproval: { label: 'Pending', bg: '#fff8e6', border: '#f0d090', color: '#704500' },
+    approved:      { label: 'Needs completion', bg: '#e7f6ec', border: '#a7d7b5', color: '#1f5d33' },
+    completed:     { label: 'Completed', bg: '#e7f6ec', border: '#a7d7b5', color: '#1f5d33' },
+    rejected:      { label: 'Rejected', bg: '#fdecec', border: '#f5b5b5', color: '#8a2020' },
+    cancelled:     { label: 'Cancelled', bg: '#f5f1ea', border: '#ece8e1', color: '#4a4a4f' },
+    expired:       { label: 'Expired', bg: '#f5f1ea', border: '#ece8e1', color: '#4a4a4f' }
+  };
+  const m = map[s] || { label: status || '—', bg: '#f5f1ea', border: '#ece8e1', color: '#4a4a4f' };
+  return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:${m.bg}; border:1px solid ${m.border}; color:${m.color};">${esc(m.label)}</span>`;
+}
+
+function updateApprovalsBadge() {
+  const badge = $('approvalsBadge');
+  if (!badge) return;
+  const n = approvalsRaw.filter(r => ['needsapproval', 'approved'].includes((r.status || '').toLowerCase())).length;
+  if (n > 0) {
+    badge.textContent = n > 99 ? '99+' : String(n);
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+async function refreshApprovalsBadge() {
+  if (approvalsLoaded) { updateApprovalsBadge(); return; }
+  const badge = $('approvalsBadge');
+  if (!badge) return;
+  try {
+    const data = await graphGet('beta/deviceManagement/operationApprovalRequests?$top=999');
+    const n = (data.value || []).filter(r => ['needsapproval', 'approved'].includes((r.status || '').toLowerCase())).length;
+    if (n > 0) {
+      badge.textContent = n > 99 ? '99+' : String(n);
+      badge.style.display = '';
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch {
+    badge.style.display = 'none'; // best-effort — don't interrupt sign-in flow
+  }
+}
+
+async function loadApprovals(force = false) {
+  if (approvalsLoaded && !force) return;
+  $('approvalsLoading').style.display = '';
+  $('approvalsContent').style.display = 'none';
+  $('approvalsError').innerHTML = '';
+  try {
+    let path = 'beta/deviceManagement/operationApprovalRequests';
+    const all = [];
+    while (path) {
+      const data = await graphGet(path);
+      if (data.value) all.push(...data.value);
+      const next = data['@odata.nextLink'];
+      path = next ? next.replace('https://graph.microsoft.com/', '') : null;
+    }
+    approvalsRaw = all;
+    apSelected.clear();
+    approvalsLoaded = true;
+    updateApprovalsBadge();
+    populateApprovalsTypeFilter();
+    $('approvalsLoading').style.display = 'none';
+    $('approvalsContent').style.display = '';
+    renderApprovalsTiles();
+    renderApprovalsTable();
+  } catch (e) {
+    console.error('Approvals load failed', e);
+    $('approvalsLoading').style.display = 'none';
+    $('approvalsError').innerHTML = `<div class="error-banner">Failed to load approval queue: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+function populateApprovalsTypeFilter() {
+  const types = new Set();
+  approvalsRaw.forEach(r => {
+    (r.requiredOperationApprovalPolicyTypes || []).forEach(t => types.add(t));
+  });
+  const sel = $('approvalsTypeFilter');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">All types</option>' +
+    [...types].sort().map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+  if ([...types].includes(current)) sel.value = current;
+}
+
+function renderApprovalsTiles() {
+  const now = Date.now();
+  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+  let needsApproval = 0, needsCompletion = 0, completed = 0, rejected = 0, expired = 0;
+  approvalsRaw.forEach(r => {
+    const s = (r.status || '').toLowerCase();
+    const lastMod = r.lastModifiedDateTime ? new Date(r.lastModifiedDateTime).getTime() : 0;
+    const recent = lastMod >= sevenDaysAgo;
+    if (s === 'needsapproval') needsApproval++;
+    else if (s === 'approved') needsCompletion++;    // approved by peer, requestor still needs to act
+    else if (recent && s === 'completed') completed++;
+    else if (recent && s === 'rejected') rejected++;
+    else if (recent && s === 'expired') expired++;
+  });
+  const pending = needsApproval + needsCompletion;
+  $('apTilePendingApproval').textContent = needsApproval;
+  $('apTilePendingCompletion').textContent = needsCompletion;
+  $('apTileApproved').textContent = completed;
+  $('apTileRejected').textContent = rejected;
+  $('apTileExpired').textContent = expired;
+  // Resolution rate: both needsApproval and needsCompletion are still in-flight
+  // (no terminal outcome yet), so they drag the rate down. Null when no data.
+  const seen = completed + rejected + pending + expired;
+  const decided = completed + rejected;
+  const rate = seen === 0 ? null : (decided / seen) * 100;
+  setGaugeKpi('aprResRing', 'aprResRate', rate, { thresholds: { good: 90, watch: 75 } });
+}
+
+function applyApprovalsFilters(rows) {
+  const q = ($('approvalsFilter').value || '').toLowerCase().trim();
+  const statusFilter = ($('approvalsStatusFilter').value || '').toLowerCase();
+  const typeFilter = $('approvalsTypeFilter').value || '';
+  return rows.filter(r => {
+    const s = (r.status || '').toLowerCase();
+    if (statusFilter === 'pending') {
+      if (s !== 'needsapproval' && s !== 'approved') return false;
+    } else if (statusFilter && s !== statusFilter) return false;
+    if (typeFilter && !(r.requiredOperationApprovalPolicyTypes || []).includes(typeFilter)) return false;
+    if (q) {
+      const hay = [approvalRequestor(r), approvalApprover(r), approvalType(r), r.requestJustification, r.approvalJustification, r.id]
+        .filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+const aprTileMap = {
+  apTilePendingApproval: 'needsApproval',
+  apTilePendingCompletion: 'approved',
+  apTileApproved: 'completed',
+  apTileRejected: 'rejected',
+  apTileExpired: 'expired'
+};
+
+function syncApprovalsTileUi() {
+  const current = $('approvalsStatusFilter').value;
+  Object.keys(aprTileMap).forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    const tile = el.closest('.tile');
+    if (!tile) return;
+    tile.classList.toggle('active', aprTileMap[id] === current);
+  });
+}
+
+function renderApprovalsTable() {
+  // Show Clear KPI when any filter is non-default
+  const statusActive = !!$('approvalsStatusFilter').value;
+  const typeActive = !!$('approvalsTypeFilter').value;
+  const searchActive = !!($('approvalsFilter').value || '').trim();
+  $('btnApprovalsClearKpi').style.display = (statusActive || typeActive || searchActive) ? '' : 'none';
+  syncApprovalsTileUi();
+  let rows = applyApprovalsFilters(approvalsRaw);
+  const dir = approvalsSortDir === 'asc' ? 1 : -1;
+  rows.sort((a, b) => {
+    let av, bv;
+    if (approvalsSortKey === 'requestor') { av = approvalRequestor(a).toLowerCase(); bv = approvalRequestor(b).toLowerCase(); }
+    else if (approvalsSortKey === 'type') { av = approvalType(a).toLowerCase(); bv = approvalType(b).toLowerCase(); }
+    else if (approvalsSortKey === 'status') { av = (a.status || '').toLowerCase(); bv = (b.status || '').toLowerCase(); }
+    else { av = a[approvalsSortKey] || ''; bv = b[approvalsSortKey] || ''; }
+    if (av < bv) return -dir;
+    if (av > bv) return dir;
+    return 0;
+  });
+
+  const body = $('approvalsRowsBody');
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--muted); padding:24px;">No approval requests match the current filters.</td></tr>`;
+  } else {
+    body.innerHTML = rows.map(r => {
+      const s = (r.status || '').toLowerCase();
+      const isPending = s === 'needsapproval';
+      const isApproved = s === 'approved';
+      const justification = (r.requestJustification || '').trim();
+      const truncated = justification.length > 80 ? justification.slice(0, 80) + '…' : justification;
+      const actions = isPending
+        ? `<button class="btn" data-approve="${esc(r.id)}" style="padding:4px 10px; font-size:11px; margin-right:4px;">Approve</button><button class="btn btn-danger" data-reject="${esc(r.id)}" style="padding:4px 10px; font-size:11px; margin-right:4px;">Reject</button><button class="btn btn-ghost" data-cancel-approval="${esc(r.id)}" style="padding:4px 10px; font-size:11px;">Cancel</button>`
+        : isApproved
+        ? `<button class="btn" data-complete-approval="${esc(r.id)}" style="padding:4px 10px; font-size:11px; margin-right:4px; background:#1f5d33; border-color:#1f5d33;">Complete</button><button class="btn btn-ghost" data-approval-details="${esc(r.id)}" style="padding:4px 10px; font-size:11px;">Details</button>`
+        : `<button class="btn btn-ghost" data-approval-details="${esc(r.id)}" style="padding:4px 10px; font-size:11px;">Details</button>`;
+      return `
+        <tr>
+          <td>${r.id ? `<input type="checkbox" data-ap-select="${esc(r.id)}" ${apSelected.has(r.id) ? 'checked' : ''} style="cursor:pointer;">` : ''}</td>
+          <td>${approvalRequestorCell(r)}</td>
+          <td><span style="font-family:ui-monospace,monospace; font-size:11px;">${esc(approvalType(r))}</span></td>
+          <td>${approvalStatusBadge(r.status)}</td>
+          <td class="date">${r.requestDateTime ? new Date(r.requestDateTime).toLocaleString() : '—'}</td>
+          <td class="date">${r.lastModifiedDateTime ? new Date(r.lastModifiedDateTime).toLocaleString() : '—'}</td>
+          <td title="${esc(justification)}" style="max-width:280px; overflow:hidden; text-overflow:ellipsis;">${esc(truncated) || '—'}</td>
+          <td>${actions}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+  $('approvalsCount').textContent = rows.length;
+
+  // Select-all reflects the filtered view; bulk buttons reflect filtered pending selection
+  const visibleIds = rows.map(r => r.id).filter(Boolean);
+  const selVisible = visibleIds.filter(id => apSelected.has(id));
+  const sa = $('apSelectAll');
+  sa.checked = visibleIds.length > 0 && selVisible.length === visibleIds.length;
+  sa.indeterminate = selVisible.length > 0 && selVisible.length < visibleIds.length;
+  const selPending  = rows.filter(r => r.id && apSelected.has(r.id) && (r.status || '').toLowerCase() === 'needsapproval').length;
+  const selApproved = rows.filter(r => r.id && apSelected.has(r.id) && (r.status || '').toLowerCase() === 'approved').length;
+  $('btnApprovalsApproveSel').style.display  = selPending  ? '' : 'none';
+  $('btnApprovalsRejectSel').style.display   = selPending  ? '' : 'none';
+  $('btnApprovalsCancelSel').style.display   = selPending  ? '' : 'none';
+  $('btnApprovalsCompleteSel').style.display = selApproved ? '' : 'none';
+}
+
+// Cancelling an approval request is the collection-bound Graph action
+// cancelMyRequest with the request ID in the body; only the original requestor
+// can cancel. POST .../{id}/cancel has no OData route, and DELETE on the
+// request returns 404 (which graphDelete treats as success) without cancelling
+// anything — both earlier attempts failed silently or loudly for this reason.
+async function cancelApprovalRequest(id, token) {
+  try {
+    await graphPost('beta/deviceManagement/operationApprovalRequests/cancelMyRequest', { id }, { token });
+  } catch (e) {
+    // Instance-bound fallback, same signature as approve/reject
+    try {
+      await graphPost('beta/deviceManagement/operationApprovalRequests/' + encodeURIComponent(id) + '/cancelApproval',
+        { justification: 'Cancelled from Intune Dashboard', approvalSource: 'adminConsole' }, { token });
+    } catch (_) { throw e; }
+  }
+}
+
+async function executeApprovalComplete(r, approvalToken) {
+  let req = r;
+  try {
+    req = await graphGet('beta/deviceManagement/operationApprovalRequests/' + encodeURIComponent(r.id), { token: approvalToken });
+  } catch (getErr) {
+    console.warn('[MAA Complete] GET failed, using list data:', getErr.message);
+  }
+
+  // operationDetails can be a JSON string in some beta API versions
+  let op = req.operationDetails;
+  if (typeof op === 'string') { try { op = JSON.parse(op); } catch (_) { op = {}; } }
+  op = op || {};
+
+  const types = (req.requiredOperationApprovalPolicyTypes || []).map(t => t.toLowerCase()).join(' ');
+
+  // Completion = resubmit the original operation with x-msft-approval-code
+  // (the approval request ID, plain text — not base64) REPLACING the
+  // justification header. Sending the justification header here makes the
+  // service treat it as a new submission and fail. Documented in
+  // learn.microsoft.com "Use Multi Admin Approval with the Microsoft Graph API".
+  const maaHeader = { 'x-msft-approval-code': req.id || r.id };
+
+  // payloadType names the API entity the request touches, e.g.
+  // "Microsoft.Management.Services.Api.ManagedDevice" or "…Api.MobileApp"
+  const typeKey = (req.payloadType || '').split('.').pop().toLowerCase();
+
+  // Device remote actions: payloadId is the managed device ID, actionName the
+  // op type. Gate on the payload type so an app/policy request whose
+  // actionName happens to be "Delete" can't be misrouted to managedDevices.
+  const isDeviceOp = typeKey === 'manageddevice' || types.includes('device');
+  const deviceId = req.payloadId
+    || op.deviceId || op.managedDeviceId || op.resourceId || op.id
+    || req.deviceId || req.managedDeviceId || null;
+  const action = (req.actionName || '').toLowerCase();
+
+  if (isDeviceOp && deviceId && (action === 'wipe' || /wipe/.test(types))) {
+    const devToken = await ensureScopeToken('DeviceManagementManagedDevices.ReadWrite.All');
+    await graphPost('beta/deviceManagement/managedDevices/' + encodeURIComponent(deviceId) + '/wipe',
+      { keepEnrollmentData: false, keepUserData: false }, { token: devToken, headers: maaHeader });
+    return;
+  }
+  if (isDeviceOp && deviceId && (action === 'retire' || /retire/.test(types))) {
+    const devToken = await ensureScopeToken('DeviceManagementManagedDevices.ReadWrite.All');
+    await graphPost('beta/deviceManagement/managedDevices/' + encodeURIComponent(deviceId) + '/retire',
+      {}, { token: devToken, headers: maaHeader });
+    return;
+  }
+  if (isDeviceOp && deviceId && (action === 'delete' || /delete/.test(types))) {
+    const devToken = await ensureScopeToken('DeviceManagementManagedDevices.ReadWrite.All');
+    await graphDelete('beta/deviceManagement/managedDevices/' + encodeURIComponent(deviceId),
+      { token: devToken, headers: maaHeader });
+    return;
+  }
+
+  // Everything else: resolve the collection for the payload type and replay
+  // the original operation — Create re-POSTs the body stored in payload,
+  // Delete DELETEs /{payloadId}, Update PATCHes /{payloadId} with the payload.
+  const TYPE_TARGETS = {
+    mobileapp:                            { path: 'beta/deviceAppManagement/mobileApps',              scope: 'DeviceManagementApps.ReadWrite.All' },
+    operationapprovalpolicy:              { path: 'beta/deviceManagement/operationApprovalPolicies',  scope: 'DeviceManagementRBAC.ReadWrite.All' },
+    devicemanagementscript:               { path: 'beta/deviceManagement/deviceManagementScripts',    scope: 'DeviceManagementConfiguration.ReadWrite.All' },
+    devicehealthscript:                   { path: 'beta/deviceManagement/deviceHealthScripts',        scope: 'DeviceManagementConfiguration.ReadWrite.All' },
+    devicecompliancepolicy:               { path: 'beta/deviceManagement/deviceCompliancePolicies',   scope: 'DeviceManagementConfiguration.ReadWrite.All' },
+    devicemanagementconfigurationpolicy:  { path: 'beta/deviceManagement/configurationPolicies',      scope: 'DeviceManagementConfiguration.ReadWrite.All' },
+    devicecategory:                       { path: 'beta/deviceManagement/deviceCategories',           scope: 'DeviceManagementConfiguration.ReadWrite.All' },
+  };
+  let target = TYPE_TARGETS[typeKey];
+  // App requests can carry the concrete subtype (Win32LobApp, WinGetApp, …) —
+  // all live in the mobileApps collection.
+  if (!target && (/app$/.test(typeKey) || types === 'app')) target = TYPE_TARGETS.mobileapp;
+
+  const payloadOp = (req.payloadOperation || '').toLowerCase();
+  const parsePayload = () => {
+    try { return JSON.parse(req.payload); }
+    catch (_) { throw new Error('Approval payload is not valid JSON — complete this request from the Intune portal instead.'); }
+  };
+  if (target && payloadOp === 'create' && req.payload) {
+    const tok = await ensureScopeToken(target.scope);
+    await graphPost(target.path, parsePayload(), { token: tok, headers: maaHeader });
+    return;
+  }
+  if (target && payloadOp === 'delete' && req.payloadId) {
+    const tok = await ensureScopeToken(target.scope);
+    await graphDelete(target.path + '/' + encodeURIComponent(req.payloadId), { token: tok, headers: maaHeader });
+    return;
+  }
+  if (target && (payloadOp === 'update' || payloadOp === 'patch') && req.payloadId && req.payload) {
+    const tok = await ensureScopeToken(target.scope);
+    await graphPatch(target.path + '/' + encodeURIComponent(req.payloadId), parsePayload(), { token: tok, headers: maaHeader });
+    return;
+  }
+
+  throw new Error(
+    `This request type isn't supported for dashboard completion yet ` +
+    `(${req.payloadType || 'unknown type'} · ${req.payloadOperation || '?'} · types="${types || 'none'}"). ` +
+    `Complete it from the Intune portal (Tenant administration → Multi Admin Approval → My requests).`
+  );
+}
+
+function openApprovalActionModal(id, action) {
+  const req = approvalsRaw.find(r => r.id === id);
+  if (!req) return;
+  const META = {
+    approve:   { title: 'Approve request',  desc: 'Approve this request? Intune will execute the operation as soon as approval is recorded.',           placeholder: 'e.g. Reviewed change ticket CHG-12345',                     btnClass: 'btn',           btnStyle: 'background:#1f5d33; border-color:#1f5d33;', label: 'Approve'          },
+    reject:    { title: 'Reject request',   desc: 'Reject this request? The requester will see the rejection in their queue, and the operation will not run.', placeholder: 'e.g. Out of policy — see governance doc',                  btnClass: 'btn btn-danger', btnStyle: '',                                 label: 'Reject'           },
+    cancel:    { title: 'Cancel request',   desc: 'Cancel this pending request? The request will be marked as cancelled and the operation will not run.',       placeholder: '', btnClass: 'btn btn-danger', btnStyle: '',                                 label: 'Cancel request', noJustification: true, noJustNote: 'No justification is required — the request will be cancelled in Intune.' },
+    complete:  { title: 'Complete request', desc: 'Re-execute the approved operation (wipe / retire / delete). Intune will carry out the action now that approval is granted.',  placeholder: '', btnClass: 'btn',           btnStyle: 'background:#1f5d33; border-color:#1f5d33;', label: 'Execute now',    noJustification: true, noJustNote: 'No justification is needed — Intune executes the operation using the recorded approval.' },
+  };
+  const m = META[action] || META.approve;
+  $('apaTitle').textContent = m.title;
+  $('apaSubtitle').textContent = `${approvalRequestor(req)} · ${approvalType(req)}`;
+  $('apaBody').innerHTML = `
+    <p style="margin-top:0;">${m.desc}</p>
+    ${req.requestJustification ? `<p style="margin-bottom:6px;"><strong>Requester's justification:</strong></p><blockquote class="justification-quote">${esc(req.requestJustification)}</blockquote>` : ''}
+    ${m.noJustification
+      ? `<p style="margin-bottom:6px; color:var(--muted); font-size:12px;">${m.noJustNote}</p>`
+      : `<p style="margin-bottom:6px;"><strong>Your justification</strong> <span style="color:var(--muted); font-weight:400;">(required, recorded in the audit log; max 1024 chars):</span></p>
+    <textarea id="apaJustification" class="search" rows="3" style="width:100%; font-family:inherit; resize:vertical; margin-bottom:16px;" maxlength="1024" placeholder="${esc(m.placeholder)}"></textarea>`}
+    <div id="apaError"></div>
+    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;">
+      <button class="btn btn-ghost" onclick="closeApprovalActionModal()">Dismiss</button>
+      <button class="${m.btnClass}" id="apaSubmitBtn" ${m.noJustification ? '' : 'disabled'} style="${m.btnStyle}">${m.label}</button>
+    </div>
+  `;
+  const input = $('apaJustification');
+  const btn = $('apaSubmitBtn');
+  if (input) input.addEventListener('input', () => { btn.disabled = input.value.trim() === ''; });
+  btn.addEventListener('click', () => submitApprovalAction(id, action, input ? input.value.trim() : ''));
+  attachSearchClearButtons($('apaBody'));
+  $('approvalActionModal').classList.add('show');
+  if (input) setTimeout(() => input.focus(), 0);
+}
+
+function closeApprovalActionModal() {
+  $('approvalActionModal').classList.remove('show');
+}
+
+async function submitApprovalAction(id, action, justification) {
+  const btn = $('apaSubmitBtn');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = { approve: 'Approving…', reject: 'Rejecting…', cancel: 'Cancelling…', complete: 'Completing…' }[action] || 'Submitting…';
+  $('apaError').innerHTML = '';
+  try {
+    const token = await ensureScopeToken('DeviceManagementApps.ReadWrite.All');
+    if (action === 'cancel') {
+      await cancelApprovalRequest(id, token);
+    } else if (action === 'complete') {
+      const req = approvalsRaw.find(r => r.id === id) || { id };
+      await executeApprovalComplete(req, token);
+    } else {
+      await graphPost('beta/deviceManagement/operationApprovalRequests/' + encodeURIComponent(id) + '/' + action,
+        { justification, approvalSource: 'adminConsole' }, { token });
+      if (action === 'approve') {
+        // Tell the requestor to come back and press Complete — non-blocking.
+        const req = approvalsRaw.find(r => r.id === id);
+        if (req) { try { await sendRequestorApprovedEmail([req], justification); } catch (mailErr) { console.warn('Requestor notification failed:', mailErr); } }
+      }
+    }
+    closeApprovalActionModal();
+    loadApprovals(true);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = originalText;
+    $('apaError').innerHTML = `<div class="error-banner">Failed to ${esc(action)}: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+$('approvalsFilter').addEventListener('input', renderApprovalsTable);
+$('approvalsStatusFilter').addEventListener('change', renderApprovalsTable);
+$('approvalsTypeFilter').addEventListener('change', renderApprovalsTable);
+$('btnApprovalsRefresh').addEventListener('click', () => loadApprovals(true));
+$('btnApprovalsClearKpi').addEventListener('click', () => {
+  $('approvalsStatusFilter').value = '';
+  $('approvalsTypeFilter').value = '';
+  $('approvalsFilter').value = '';
+  $('approvalsFilter').dispatchEvent(new Event('input', { bubbles: true }));
+  renderApprovalsTable();
+});
+
+document.querySelectorAll('[data-approvals-tile]').forEach(tile => {
+  tile.addEventListener('click', () => {
+    const target = tile.dataset.approvalsTile;
+    const current = $('approvalsStatusFilter').value;
+    // Toggle off if clicking the already-active tile
+    $('approvalsStatusFilter').value = (current === target) ? '' : target;
+    renderApprovalsTable();
+  });
+});
+
+$('approvalsRowsBody').addEventListener('click', e => {
+  const ds = e.target.dataset || {};
+  if (ds.approve) openApprovalActionModal(ds.approve, 'approve');
+  else if (ds.reject) openApprovalActionModal(ds.reject, 'reject');
+  else if (ds.cancelApproval) openApprovalActionModal(ds.cancelApproval, 'cancel');
+  else if (ds.completeApproval) openApprovalActionModal(ds.completeApproval, 'complete');
+});
+
+// Checkbox row selection
+$('approvalsRowsBody').addEventListener('change', e => {
+  const cb = e.target.closest('[data-ap-select]');
+  if (!cb) return;
+  if (cb.checked) apSelected.add(cb.dataset.apSelect);
+  else apSelected.delete(cb.dataset.apSelect);
+  renderApprovalsTable();
+});
+$('apSelectAll').addEventListener('change', () => {
+  const rows = applyApprovalsFilters(approvalsRaw);
+  const all = $('apSelectAll').checked;
+  rows.forEach(r => { if (r.id) { if (all) apSelected.add(r.id); else apSelected.delete(r.id); } });
+  renderApprovalsTable();
+});
+
+// Bulk actions — operate on the filtered pending selection
+async function bulkApprovalAction(action) {
+  const filtered = applyApprovalsFilters(approvalsRaw);
+  const targetStatus = action === 'complete' ? 'approved' : 'needsapproval';
+  const targets = filtered.filter(r => r.id && apSelected.has(r.id) && (r.status || '').toLowerCase() === targetStatus);
+  if (!targets.length) return;
+  let just = '';
+  if (action === 'cancel') {
+    if (!confirm(`Cancel ${targets.length} pending request${targets.length === 1 ? '' : 's'}? The operations will not run.`)) return;
+  } else if (action === 'complete') {
+    if (!confirm(`Execute ${targets.length} approved operation${targets.length === 1 ? '' : 's'} (wipe / retire / delete) now?`)) return;
+  } else {
+    just = prompt(`Enter justification for ${action}ing ${targets.length} request(s) (required, recorded in the audit log; max 1024 chars):`);
+    if (!just || !just.trim()) return;
+  }
+  let token;
+  try { token = await ensureScopeToken('DeviceManagementApps.ReadWrite.All'); } catch (e) {
+    $('approvalsError').innerHTML = `<div class="error-banner">Consent not granted: ${esc(e.message || String(e))}</div>`; return;
+  }
+  const succeeded = [], failed = [];
+  for (let i = 0; i < targets.length; i++) {
+    const r = targets[i];
+    try {
+      if (action === 'cancel') {
+        await cancelApprovalRequest(r.id, token);
+      } else if (action === 'complete') {
+        await executeApprovalComplete(r, token);
+      } else {
+        await graphPost('beta/deviceManagement/operationApprovalRequests/' + encodeURIComponent(r.id) + '/' + action,
+          { justification: just.trim(), approvalSource: 'adminConsole' }, { token });
+      }
+      succeeded.push(r);
+      apSelected.delete(r.id);
+    } catch (e) {
+      failed.push({ r, error: e.message || String(e) });
+    }
+  }
+  // Notify each requestor once that their request(s) were approved and now
+  // need completing — non-blocking, grouped so nobody gets ten emails.
+  if (action === 'approve' && succeeded.length) {
+    const byUpn = new Map();
+    for (const r of succeeded) {
+      const upn = r.requestor?.user?.Upn || '';
+      if (!byUpn.has(upn)) byUpn.set(upn, []);
+      byUpn.get(upn).push(r);
+    }
+    for (const reqs of byUpn.values()) {
+      try { await sendRequestorApprovedEmail(reqs, just.trim()); } catch (mailErr) { console.warn('Requestor notification failed:', mailErr); }
+    }
+  }
+
+  const parts = [];
+  if (succeeded.length) parts.push(`✓ ${succeeded.length} ${{ approve: 'approved', reject: 'rejected', cancel: 'cancelled', complete: 'completed' }[action] || action}`);
+  if (failed.length) parts.push(`✗ ${failed.length} failed: ${failed.map(f => f.error).join('; ')}`);
+  const cls = failed.length ? 'error-banner' : 'notice-banner';
+  $('approvalsError').innerHTML = parts.length ? `<div class="${cls}">${esc(parts.join(' · '))}</div>` : '';
+  loadApprovals(true);
+}
+
+$('btnApprovalsApproveSel').addEventListener('click',  () => bulkApprovalAction('approve'));
+$('btnApprovalsRejectSel').addEventListener('click',   () => bulkApprovalAction('reject'));
+$('btnApprovalsCancelSel').addEventListener('click',   () => bulkApprovalAction('cancel'));
+$('btnApprovalsCompleteSel').addEventListener('click', () => bulkApprovalAction('complete'));
+
+document.querySelectorAll('#intuneSubApprovals th[data-asort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.asort;
+    if (approvalsSortKey === key) approvalsSortDir = approvalsSortDir === 'asc' ? 'desc' : 'asc';
+    else { approvalsSortKey = key; approvalsSortDir = 'desc'; }
+    renderApprovalsTable();
+  });
+});
+
+$('approvalActionModal').addEventListener('click', e => { if (e.target === $('approvalActionModal')) closeApprovalActionModal(); });
+
+// ============================================================
+// Secure Boot sub-tab — DHA Secure Boot enabled/disabled
+// deviceHealthAttestationState.secureBoot via list expand, then
+// progressive per-device GET for gaps (same pattern as Hardware RAM).
+// Full Autopatch cert readiness is portal-only (public Graph gap).
+// ============================================================
+let securebootLoaded = false;
+let securebootRows = [];
+let securebootTileFilter = null;
+let securebootSortKey = 'secureBoot';
+let securebootSortDir = 'asc';
+let securebootLoadGen = 0;
+let securebootAbort = null;
+
+const SB_AUTOPATCH_DOCS = 'https://learn.microsoft.com/en-us/windows/deployment/windows-autopatch/monitor/secure-boot-status-report';
+
+function parseSecureBootFlag(raw) {
+  if (raw == null || raw === '') return 'unknown';
+  if (typeof raw === 'boolean') return raw ? 'enabled' : 'disabled';
+  const s = String(raw).trim().toLowerCase();
+  if (s === 'enabled' || s === 'true' || s === '1' || s === 'yes' || s === 'on') return 'enabled';
+  if (s === 'disabled' || s === 'false' || s === '0' || s === 'no' || s === 'off') return 'disabled';
+  if (s.includes('enabled') || s.includes('turned on') || s === 'secureboot') return 'enabled';
+  if (s.includes('disabled') || s.includes('turned off')) return 'disabled';
+  return 'unknown';
+}
+
+function secureBootBadge(state) {
+  const map = {
+    enabled:  { label: 'On', bg: 'var(--good-bg)', border: 'var(--good-border)', color: 'var(--good-ink)' },
+    disabled: { label: 'Off', bg: 'var(--bad-bg)', border: 'var(--bad-border)', color: 'var(--bad-ink)' },
+    unknown:  { label: 'Unknown', bg: 'var(--row-hover)', border: 'var(--line)', color: 'var(--muted)' }
+  };
+  const m = map[state] || map.unknown;
+  return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:${m.bg}; border:1px solid ${m.border}; color:${m.color};">${m.label}</span>`;
+}
+
+function setSecurebootLoading(text, cancelable) {
+  $('securebootLoading').style.display = 'flex';
+  $('securebootLoadingText').textContent = text;
+  $('btnSecurebootCancel').style.display = cancelable ? '' : 'none';
+}
+function hideSecurebootLoading() {
+  $('securebootLoading').style.display = 'none';
+  $('btnSecurebootCancel').style.display = 'none';
+}
+
+function cancelSecureBootLoad() {
+  securebootLoadGen++;
+  if (securebootAbort) { try { securebootAbort.abort(); } catch (_) {} }
+  $('btnSecurebootCancel').style.display = 'none';
+  if (securebootRows.length) {
+    setSecurebootLoading('Cancelled — showing DHA data gathered so far.', false);
+    setTimeout(() => { if ($('securebootLoadingText').textContent.startsWith('Cancelled')) hideSecurebootLoading(); }, 2800);
+  } else {
+    securebootLoaded = false;
+    hideSecurebootLoading();
+  }
+}
+
+async function loadSecureBoot(force = false) {
+  if (securebootLoaded && !force) return;
+  if (securebootAbort) { try { securebootAbort.abort(); } catch (_) {} }
+  securebootAbort = new AbortController();
+  const signal = securebootAbort.signal;
+  const gen = ++securebootLoadGen;
+  securebootLoaded = true;
+  setSecurebootLoading('Loading Windows devices…', true);
+  $('securebootContent').style.display = 'none';
+  $('securebootError').innerHTML = '';
+  $('securebootNotice').innerHTML = '';
+  try {
+    const select = 'id,deviceName,userPrincipalName,osVersion,model,manufacturer,lastSyncDateTime,azureADDeviceId';
+    const filter = `operatingSystem eq 'Windows'`;
+    let devices = [];
+    // Prefer expand so we avoid N+1 when Graph allows it.
+    try {
+      devices = await graphGetAll(
+        `beta/deviceManagement/managedDevices?$select=${select}&$filter=${encodeURIComponent(filter)}&$expand=deviceHealthAttestationState`,
+        {
+          signal,
+          onPage: (n) => { if (gen === securebootLoadGen) setSecurebootLoading(`Loading Windows devices… ${n}`, true); }
+        }
+      );
+    } catch (e) {
+      if (e && e.name === 'AbortError') throw e;
+      console.warn('Secure Boot: expand DHA failed, listing without expand', e.message || e);
+      devices = await graphGetAll(
+        `beta/deviceManagement/managedDevices?$select=${select}&$filter=${encodeURIComponent(filter)}`,
+        {
+          signal,
+          onPage: (n) => { if (gen === securebootLoadGen) setSecurebootLoading(`Loading Windows devices… ${n}`, true); }
+        }
+      );
+    }
+    if (gen !== securebootLoadGen) return;
+
+    securebootRows = devices.map(d => {
+      const dha = d.deviceHealthAttestationState || null;
+      return {
+        id: d.id,
+        deviceName: d.deviceName || '',
+        userPrincipalName: d.userPrincipalName || '',
+        osVersion: d.osVersion || '',
+        model: d.model || '',
+        manufacturer: d.manufacturer || '',
+        lastSync: d.lastSyncDateTime || '',
+        azureADDeviceId: d.azureADDeviceId || '',
+        secureBoot: parseSecureBootFlag(dha && dha.secureBoot),
+        secureBootRaw: (dha && dha.secureBoot) || '',
+        tpmVersion: (dha && dha.tpmVersion) || '',
+        _dhaLoaded: !!(dha && (dha.secureBoot != null && dha.secureBoot !== ''))
+      };
+    });
+
+    // Progressive table before DHA fan-out finishes.
+    $('securebootContent').style.display = '';
+    $('securebootNotice').innerHTML =
+      `<div class="notice-banner"><strong>Graph scope:</strong> Secure Boot <em>enabled/disabled</em> from device health attestation.
+      Per-certificate readiness (Up to date / Not up to date / trust / confidence) is only in the
+      <a href="${SB_AUTOPATCH_DOCS}" target="_blank" rel="noopener noreferrer">Windows Autopatch Secure Boot status report</a>
+      (Intune → Reports → Windows Autopatch → Windows quality updates → Secure Boot status).</div>`;
+    renderSecureBootTiles();
+    renderSecureBootTable();
+
+    const needDha = securebootRows.filter(r => !r._dhaLoaded);
+    if (!needDha.length) {
+      hideSecurebootLoading();
+      return;
+    }
+
+    setSecurebootLoading(`Fetching health attestation 0/${needDha.length}…`, true);
+    let done = 0;
+    await mapPool(needDha, 20, async (row) => {
+      if (gen !== securebootLoadGen || signal.aborted) return;
+      try {
+        const detail = await graphGet(
+          `beta/deviceManagement/managedDevices/${encodeURIComponent(row.id)}?$select=id&$expand=deviceHealthAttestationState`,
+          { signal }
+        );
+        if (gen !== securebootLoadGen) return;
+        const dha = detail.deviceHealthAttestationState || null;
+        row.secureBoot = parseSecureBootFlag(dha && dha.secureBoot);
+        row.secureBootRaw = (dha && dha.secureBoot) || '';
+        row.tpmVersion = (dha && dha.tpmVersion) || row.tpmVersion || '';
+        row._dhaLoaded = true;
+      } catch (e) {
+        if (e && e.name === 'AbortError') throw e;
+        row._dhaLoaded = true; // stop retrying; leave unknown
+      }
+      done++;
+      if (gen === securebootLoadGen && (done % 25 === 0 || done === needDha.length)) {
+        setSecurebootLoading(`Fetching health attestation ${done}/${needDha.length}…`, true);
+        if (done % 50 === 0 || done === needDha.length) {
+          renderSecureBootTiles();
+          renderSecureBootTable();
+        }
+      }
+    }, { signal });
+
+    if (gen !== securebootLoadGen) return;
+    renderSecureBootTiles();
+    renderSecureBootTable();
+    hideSecurebootLoading();
+  } catch (e) {
+    if (e && e.name === 'AbortError') {
+      if (gen === securebootLoadGen && securebootRows.length) {
+        renderSecureBootTiles();
+        renderSecureBootTable();
+        setSecurebootLoading('Cancelled — showing data gathered so far.', false);
+        setTimeout(() => { if (gen === securebootLoadGen) hideSecurebootLoading(); }, 2800);
+      } else if (gen === securebootLoadGen) {
+        securebootLoaded = false;
+        hideSecurebootLoading();
+      }
+      return;
+    }
+    if (gen !== securebootLoadGen) return;
+    securebootLoaded = false;
+    hideSecurebootLoading();
+    console.error('Secure Boot load failed', e);
+    $('securebootError').innerHTML = `<div class="error-banner">Failed to load Secure Boot data: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+function renderSecureBootTiles() {
+  let total = 0, on = 0, off = 0, unk = 0;
+  for (const r of securebootRows) {
+    total++;
+    if (r.secureBoot === 'enabled') on++;
+    else if (r.secureBoot === 'disabled') off++;
+    else unk++;
+  }
+  $('sbTileTotal').textContent = total;
+  $('sbTileOn').textContent = on;
+  $('sbTileOff').textContent = off;
+  $('sbTileUnknown').textContent = unk;
+  const known = on + off;
+  const rate = known === 0 ? null : (on / known) * 100;
+  setGaugeKpi('sbRateRing', 'sbRate', rate, { thresholds: { good: 95, watch: 80 } });
+  document.querySelectorAll('#intuneSubSecureboot [data-sb-tile]').forEach(tile => {
+    const key = tile.dataset.sbTile;
+    tile.classList.toggle('active', securebootTileFilter === key || (key === '' && !securebootTileFilter));
+  });
+  $('btnSecurebootClearKpi').style.display = securebootTileFilter ? '' : 'none';
+}
+
+function applySecureBootFilters(rows) {
+  const q = ($('securebootFilter').value || '').toLowerCase().trim();
+  const stateF = $('securebootStateFilter').value;
+  const tile = securebootTileFilter;
+  return rows.filter(r => {
+    if (tile && r.secureBoot !== tile) return false;
+    if (stateF && r.secureBoot !== stateF) return false;
+    if (q) {
+      const hay = [r.deviceName, r.userPrincipalName, r.model, r.manufacturer, r.osVersion].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function renderSecureBootTable() {
+  let rows = applySecureBootFilters(securebootRows);
+  const dir = securebootSortDir === 'asc' ? 1 : -1;
+  rows = rows.slice().sort((a, b) => {
+    let av = a[securebootSortKey], bv = b[securebootSortKey];
+    if (securebootSortKey === 'secureBoot') {
+      const rank = { disabled: 0, unknown: 1, enabled: 2 };
+      av = rank[a.secureBoot] ?? 1;
+      bv = rank[b.secureBoot] ?? 1;
+    } else {
+      av = (av ?? '').toString().toLowerCase();
+      bv = (bv ?? '').toString().toLowerCase();
+    }
+    if (av < bv) return -dir;
+    if (av > bv) return dir;
+    return (a.deviceName || '').localeCompare(b.deviceName || '');
+  });
+  const body = $('securebootRowsBody');
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="8" class="empty" style="padding:24px; text-align:center; color:var(--muted);">No devices match.</td></tr>`;
+  } else {
+    body.innerHTML = rows.map(r => `
+      <tr>
+        <td><a href="${intuneDeviceUrl(r.id, 'overview')}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.deviceName) || '—'}</a></td>
+        <td>${esc(r.userPrincipalName) || '—'}</td>
+        <td>${esc(r.osVersion) || '—'}</td>
+        <td>${esc(r.manufacturer) || '—'}</td>
+        <td>${esc(r.model) || '—'}</td>
+        <td title="${esc(r.secureBootRaw || '')}">${secureBootBadge(r.secureBoot)}</td>
+        <td>${esc(r.tpmVersion) || '—'}</td>
+        <td class="date">${r.lastSync ? new Date(r.lastSync).toLocaleString() : '—'}</td>
+      </tr>`).join('');
+  }
+  $('securebootCount').textContent = rows.length;
+}
+
+function exportSecureBootCsv() {
+  const rows = applySecureBootFilters(securebootRows);
+  const lines = [['DeviceName', 'User', 'OSVersion', 'Manufacturer', 'Model', 'SecureBoot', 'SecureBootRaw', 'TpmVersion', 'LastSync', 'EntraDeviceId'].join(',')];
+  for (const r of rows) {
+    lines.push([
+      r.deviceName, r.userPrincipalName, r.osVersion, r.manufacturer, r.model,
+      r.secureBoot, r.secureBootRaw, r.tpmVersion, r.lastSync, r.azureADDeviceId
+    ].map(escCsv).join(','));
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `secure-boot-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+$('btnSecurebootRefresh').addEventListener('click', () => { securebootLoaded = false; loadSecureBoot(true); });
+$('btnSecurebootCancel').addEventListener('click', cancelSecureBootLoad);
+$('btnSecurebootExport').addEventListener('click', exportSecureBootCsv);
+$('btnSecurebootClearKpi').addEventListener('click', () => {
+  securebootTileFilter = null;
+  $('securebootStateFilter').value = '';
+  renderSecureBootTiles();
+  renderSecureBootTable();
+});
+$('securebootFilter').addEventListener('input', renderSecureBootTable);
+$('securebootStateFilter').addEventListener('change', () => {
+  securebootTileFilter = null;
+  renderSecureBootTiles();
+  renderSecureBootTable();
+});
+document.querySelectorAll('#intuneSubSecureboot [data-sb-tile]').forEach(tile => {
+  tile.addEventListener('click', () => {
+    const key = tile.dataset.sbTile;
+    if (key === '') securebootTileFilter = null;
+    else securebootTileFilter = securebootTileFilter === key ? null : key;
+    if (securebootTileFilter) $('securebootStateFilter').value = securebootTileFilter;
+    else $('securebootStateFilter').value = '';
+    renderSecureBootTiles();
+    renderSecureBootTable();
+  });
+});
+document.querySelectorAll('#intuneSubSecureboot th[data-sbsort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.sbsort;
+    if (securebootSortKey === key) securebootSortDir = securebootSortDir === 'asc' ? 'desc' : 'asc';
+    else { securebootSortKey = key; securebootSortDir = 'asc'; }
+    renderSecureBootTable();
+  });
+});
+
+// ============================================================
+// BitLocker sub-tab — escrow audit
+// Joins /deviceManagement/managedDevices (Windows only) with
+// /informationProtection/bitlocker/recoveryKeys (paginated) on
+// azureADDeviceId, surfaces devices encrypted-but-no-key-escrowed.
+// Uses BitlockerKey.ReadBasic.All — lists keys WITHOUT key value
+// so the dashboard never sees actual recovery key material.
+// ============================================================
+let bitlockerLoaded = false;
+let bitlockerRows = [];
+let bitlockerSortKey = 'gap';
+let bitlockerSortDir = 'desc';
+
+function bitlockerStateOf(r) {
+  if (!r.azureADDeviceId) return 'no-entra-link';
+  if (r.isEncrypted && r.keyCount === 0) return 'gap';
+  if (r.isEncrypted && r.keyCount > 0) return 'encrypted-with-key';
+  return 'not-encrypted';
+}
+
+function bitlockerStateBadge(state) {
+  const map = {
+    'gap':                { label: 'Gap', bg: '#fdecec', border: '#f5b5b5', color: '#8a2020' },
+    'encrypted-with-key': { label: 'OK', bg: '#e7f6ec', border: '#a7d7b5', color: '#1f5d33' },
+    'not-encrypted':      { label: 'Not encrypted', bg: '#fff8e6', border: '#f0d090', color: '#704500' },
+    'no-entra-link':      { label: 'No Entra link', bg: '#f5f1ea', border: '#ece8e1', color: '#4a4a4f' }
+  };
+  const m = map[state];
+  return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:${m.bg}; border:1px solid ${m.border}; color:${m.color};">${esc(m.label)}</span>`;
+}
+
+async function loadBitlocker(force = false) {
+  if (bitlockerLoaded && !force) return;
+  $('bitlockerLoading').style.display = '';
+  $('bitlockerContent').style.display = 'none';
+  $('bitlockerError').innerHTML = '';
+  try {
+    const deviceSelect = 'id,deviceName,userPrincipalName,operatingSystem,osVersion,isEncrypted,azureADDeviceId,lastSyncDateTime,manufacturer,model';
+    const deviceFilter = `operatingSystem eq 'Windows'`;
+    const [devices, keys] = await Promise.all([
+      graphGetAll(`beta/deviceManagement/managedDevices?$select=${deviceSelect}&$filter=${encodeURIComponent(deviceFilter)}`),
+      graphGetAll('v1.0/informationProtection/bitlocker/recoveryKeys')
+    ]);
+    // Build a map: azureADDeviceId → count of escrowed keys.
+    const keyCountByEntraId = new Map();
+    for (const k of keys) {
+      const id = (k.deviceId || '').toLowerCase();
+      if (!id) continue;
+      keyCountByEntraId.set(id, (keyCountByEntraId.get(id) || 0) + 1);
+    }
+    bitlockerRows = devices.map(d => {
+      const entraId = (d.azureADDeviceId || '').toLowerCase();
+      const keyCount = entraId ? (keyCountByEntraId.get(entraId) || 0) : 0;
+      return {
+        id: d.id,
+        deviceName: d.deviceName || '',
+        userPrincipalName: d.userPrincipalName || '',
+        osVersion: d.osVersion || '',
+        model: d.model || '',
+        manufacturer: d.manufacturer || '',
+        isEncrypted: !!d.isEncrypted,
+        azureADDeviceId: d.azureADDeviceId || '',
+        keyCount,
+        lastSync: d.lastSyncDateTime || ''
+      };
+    });
+    bitlockerLoaded = true;
+    $('bitlockerLoading').style.display = 'none';
+    $('bitlockerContent').style.display = '';
+    renderBitlockerTiles();
+    renderBitlockerTable();
+  } catch (e) {
+    console.error('BitLocker load failed', e);
+    $('bitlockerLoading').style.display = 'none';
+    $('bitlockerError').innerHTML = `<div class="error-banner">Failed to load BitLocker data: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+// Drive a circular-progress gauge tile (svg ring + percentage label).
+// rate: 0..100, or null for "no data" → em-dash + grey ring.
+// opts.thresholds: { good, watch } — value ≥ good is green, ≥ watch is yellow, below is red.
+// opts.display: optional pre-formatted string (e.g. "99%") to override the rounded percent.
+function setGaugeKpi(ringId, valueId, rate, opts = {}) {
+  const CIRC = 125.66; // 2 * π * 20 — matches r="20" in the gauge SVG
+  const ring = $(ringId);
+  const value = $(valueId);
+  const thresholds = opts.thresholds || { good: 99, watch: 90 };
+  if (rate == null || Number.isNaN(rate)) {
+    if (value) { value.textContent = '—'; value.style.color = 'var(--muted)'; }
+    if (ring) { ring.style.strokeDashoffset = CIRC; ring.style.stroke = 'var(--line)'; }
+    return;
+  }
+  const clamped = Math.max(0, Math.min(100, rate));
+  const color = clamped < thresholds.watch ? '#c0392b'
+              : clamped < thresholds.good  ? '#d4a017'
+              :                              '#1f7a3a';
+  if (value) {
+    value.textContent = opts.display ?? (Math.round(clamped) + '%');
+    value.style.color = color;
+  }
+  if (ring) {
+    ring.style.strokeDashoffset = CIRC * (1 - clamped / 100);
+    ring.style.stroke = color;
+  }
+}
+
+function renderBitlockerTiles() {
+  // Three risk tiers (mutually exclusive at the row level):
+  //   safe         = encrypted AND key escrowed       → green
+  //   gap          = encrypted AND no key in Entra    → red (the dangerous one)
+  //   notEncrypted = not encrypted                    → amber (policy gap)
+  let total = 0, encrypted = 0, safe = 0, gap = 0, notEncrypted = 0;
+  for (const r of bitlockerRows) {
+    total++;
+    if (r.isEncrypted) {
+      encrypted++;
+      if (r.keyCount > 0) safe++; else gap++;
+    } else {
+      notEncrypted++;
+    }
+  }
+  $('blTileTotal').textContent = total;
+  $('blTileSafe').textContent = safe;
+  $('blTileGap').textContent = gap;
+  $('blTileNotEnc').textContent = notEncrypted;
+
+  // Key Escrow Success Rate = devices with key / encrypted devices.
+  // Undefined when no encrypted devices exist (show em-dash + empty ring).
+  const ring = $('blEscrowRing');
+  const CIRC = 125.66; // 2 * π * 20
+  if (encrypted === 0) {
+    $('blTileRate').textContent = '—';
+    $('blTileRate').style.color = 'var(--muted)';
+    if (ring) { ring.style.strokeDashoffset = CIRC; ring.style.stroke = 'var(--line)'; }
+  } else {
+    const rate = (safe / encrypted) * 100;
+    // Round to nearest integer unless we'd round 99.x → 100 while gap > 0 (don't lie).
+    const display = (gap > 0 && rate >= 99.5) ? '99%' : Math.round(rate) + '%';
+    $('blTileRate').textContent = display;
+    // Color the percentage by health band: red <90, amber <99, green ≥99.
+    const color = rate < 90 ? '#8a2020' : (rate < 99 ? '#704500' : '#1f5d33');
+    $('blTileRate').style.color = color;
+    if (ring) {
+      ring.style.strokeDashoffset = CIRC * (1 - rate / 100);
+      ring.style.stroke = color;
+    }
+  }
+}
+
+function applyBitlockerFilters(rows) {
+  const q = ($('bitlockerFilter').value || '').toLowerCase().trim();
+  const state = $('bitlockerStateFilter').value;
+  return rows.filter(r => {
+    if (state === 'encrypted-any') { if (!r.isEncrypted) return false; }
+    else if (state === 'key-escrowed-any') { if (!(r.keyCount > 0)) return false; }
+    else if (state && bitlockerStateOf(r) !== state) return false;
+    if (q) {
+      const hay = [r.deviceName, r.userPrincipalName, r.model, r.manufacturer].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+const blTileMap = {
+  blTileTotal: '',
+  blTileSafe: 'encrypted-with-key',
+  blTileGap: 'gap',
+  blTileNotEnc: 'not-encrypted'
+};
+
+function syncBitlockerTileUi() {
+  const current = $('bitlockerStateFilter').value;
+  Object.keys(blTileMap).forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    const tile = el.closest('.tile');
+    if (!tile) return;
+    const target = blTileMap[id];
+    // Don't highlight the "Windows devices" total tile — its target '' is the default state
+    tile.classList.toggle('active', target !== '' && current === target);
+  });
+}
+
+function renderBitlockerTable() {
+  // Show Clear KPI when any filter is non-default
+  const stateActive = !!$('bitlockerStateFilter').value;
+  const searchActive = !!($('bitlockerFilter').value || '').trim();
+  $('btnBitlockerClearKpi').style.display = (stateActive || searchActive) ? '' : 'none';
+  syncBitlockerTileUi();
+  let rows = applyBitlockerFilters(bitlockerRows);
+  const dir = bitlockerSortDir === 'asc' ? 1 : -1;
+  rows.sort((a, b) => {
+    let av, bv;
+    if (bitlockerSortKey === 'encryptionState') { av = a.isEncrypted ? 1 : 0; bv = b.isEncrypted ? 1 : 0; }
+    else if (bitlockerSortKey === 'gap') {
+      // sort gap-first when desc
+      av = (a.isEncrypted && a.keyCount === 0) ? 1 : 0;
+      bv = (b.isEncrypted && b.keyCount === 0) ? 1 : 0;
+    }
+    else { av = a[bitlockerSortKey] || ''; bv = b[bitlockerSortKey] || ''; if (typeof av === 'string') { av = av.toLowerCase(); bv = (bv || '').toString().toLowerCase(); } }
+    if (av < bv) return -dir;
+    if (av > bv) return dir;
+    return a.deviceName.toLowerCase().localeCompare(b.deviceName.toLowerCase());
+  });
+
+  const body = $('bitlockerRowsBody');
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--muted); padding:24px;">No devices match the current filters.</td></tr>`;
+  } else {
+    body.innerHTML = rows.map(r => {
+      const state = bitlockerStateOf(r);
+      const deviceCell = r.id
+        ? `<a href="https://intune.microsoft.com/#view/Microsoft_Intune_Devices/DeviceSettingsMenuBlade/~/overview/mdmDeviceId/${encodeURIComponent(r.id)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.deviceName) || '—'}</a>`
+        : (esc(r.deviceName) || '—');
+      return `
+        <tr>
+          <td>${deviceCell}</td>
+          <td>${esc(r.userPrincipalName) || '—'}</td>
+          <td>${esc(r.osVersion) || '—'}</td>
+          <td>${esc(r.model) || '—'}</td>
+          <td>${r.isEncrypted ? bitlockerStateBadge(state === 'gap' ? 'gap' : 'encrypted-with-key') : bitlockerStateBadge('not-encrypted')}</td>
+          <td>${r.keyCount > 0 ? r.keyCount : (r.azureADDeviceId ? '0' : bitlockerStateBadge('no-entra-link'))}</td>
+          <td class="date">${r.lastSync ? new Date(r.lastSync).toLocaleString() : '—'}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+  $('bitlockerCount').textContent = rows.length;
+}
+
+function exportBitlockerCsv() {
+  const rows = applyBitlockerFilters(bitlockerRows);
+  const header = ['DeviceName','User','OSVersion','Manufacturer','Model','IsEncrypted','KeyCount','State','AzureADDeviceId','LastSync'];
+  const lines = [header.join(',')].concat(rows.map(r => [
+    r.deviceName, r.userPrincipalName, r.osVersion, r.manufacturer, r.model,
+    r.isEncrypted ? 'true' : 'false', r.keyCount, bitlockerStateOf(r), r.azureADDeviceId, r.lastSync
+  ].map(escCsv).join(',')));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `bitlocker-escrow-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+$('bitlockerFilter').addEventListener('input', renderBitlockerTable);
+$('bitlockerStateFilter').addEventListener('change', renderBitlockerTable);
+$('btnBitlockerRefresh').addEventListener('click', () => loadBitlocker(true));
+$('btnBitlockerExport').addEventListener('click', exportBitlockerCsv);
+$('btnBitlockerClearKpi').addEventListener('click', () => {
+  $('bitlockerStateFilter').value = '';
+  $('bitlockerFilter').value = '';
+  $('bitlockerFilter').dispatchEvent(new Event('input', { bubbles: true }));
+  renderBitlockerTable();
+});
+
+document.querySelectorAll('[data-bl-tile]').forEach(tile => {
+  tile.addEventListener('click', () => {
+    const target = tile.dataset.blTile;
+    const current = $('bitlockerStateFilter').value;
+    // Toggle off if clicking the already-active tile; total tile ('') always goes to ''
+    $('bitlockerStateFilter').value = (target !== '' && current === target) ? '' : target;
+    renderBitlockerTable();
+  });
+});
+
+document.querySelectorAll('#intuneSubBitlocker th[data-bsort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.bsort;
+    if (bitlockerSortKey === key) bitlockerSortDir = bitlockerSortDir === 'asc' ? 'desc' : 'asc';
+    else { bitlockerSortKey = key; bitlockerSortDir = 'desc'; }
+    renderBitlockerTable();
+  });
+});
+
+// ============================================================
+// Disk space sub-tab — Win32 app requirement-rule pre-flight
+// Pulls Windows managedDevices with freeStorageSpaceInBytes and
+// totalStorageSpaceInBytes (already in the scope you have), surfaces
+// devices that are about to silently fail the "Disk space required
+// (MB)" requirement rule on Win32 apps. Self-contained Graph call
+// (slim $select) so the tab loads fast even if Hardware hasn't run.
+// ============================================================
+let diskspaceLoaded = false;
+let diskspaceRows = [];
+let diskspaceSortKey = 'freeMB';
+let diskspaceSortDir = 'asc'; // worst (lowest free) first
+
+async function loadDiskspace(force = false) {
+  if (diskspaceLoaded && !force) return;
+  $('diskspaceLoading').style.display = '';
+  $('diskspaceContent').style.display = 'none';
+  $('diskspaceError').innerHTML = '';
+  try {
+    // Use the exact same $select shape as the Hardware sub-tab (L4814) —
+    // that one works in this tenant, our slimmer custom selects 401 from
+    // the DeviceFE proxy. Storage comes back in the LIST so no per-device
+    // GET loop is needed.
+    const select = 'id,deviceName,manufacturer,model,physicalMemoryInBytes,totalStorageSpaceInBytes,'
+                 + 'freeStorageSpaceInBytes,osVersion,operatingSystem,lastSyncDateTime,'
+                 + 'serialNumber,userPrincipalName,azureADDeviceId';
+    const devices = await graphGetAll(
+      'beta/deviceManagement/managedDevices?$select=' + encodeURIComponent(select)
+    );
+    const MB = 1024 * 1024;
+    diskspaceRows = devices.filter(d => d.operatingSystem === 'Windows').map(d => {
+      const freeBytes  = d.freeStorageSpaceInBytes  || 0;
+      const totalBytes = d.totalStorageSpaceInBytes || 0;
+      const freeMB  = freeBytes  ? Math.floor(freeBytes  / MB) : null;
+      const totalMB = totalBytes ? Math.floor(totalBytes / MB) : null;
+      return {
+        id: d.id,
+        deviceName: d.deviceName || '',
+        userPrincipalName: d.userPrincipalName || '',
+        osVersion: d.osVersion || '',
+        model: d.model || '',
+        manufacturer: d.manufacturer || '',
+        freeMB,
+        totalMB,
+        freePct: (freeMB != null && totalMB) ? (freeMB / totalMB) * 100 : null,
+        lastSync: d.lastSyncDateTime || ''
+      };
+    });
+
+    diskspaceLoaded = true;
+    $('diskspaceLoading').style.display = 'none';
+    $('diskspaceContent').style.display = '';
+    renderDiskspaceTiles();
+    renderDiskspaceTable();
+  } catch (e) {
+    console.error('Disk space load failed', e);
+    $('diskspaceLoading').style.display = 'none';
+    $('diskspaceError').innerHTML = `<div class="error-banner">Failed to load disk-space data: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+// Format free/total space — show MB under 1 GB so the < 250 MB / < 500 MB
+// bands stay readable, GB above. null → em-dash.
+function dsFormatMB(mb) {
+  if (mb == null) return '—';
+  if (mb < 1024) return mb + ' MB';
+  const gb = mb / 1024;
+  return (gb < 10 ? gb.toFixed(1) : Math.round(gb)) + ' GB';
+}
+
+// Color band for a given free-MB value — matches the dropdown bands.
+function dsColorForFreeMB(freeMB) {
+  if (freeMB == null) return 'var(--muted)';
+  if (freeMB < 1024)  return '#8a2020'; // red — emergency
+  if (freeMB < 5120)  return '#704500'; // amber — at risk
+  if (freeMB < 20480) return '#7a5f1f'; // yellow — watch
+  return '#1f5d33';                     // green — healthy
+}
+
+function renderDiskspaceTiles() {
+  let total = 0, crit = 0, warn = 0, watch = 0;
+  let lowest = null; // row with smallest freeMB (ignoring null)
+  for (const r of diskspaceRows) {
+    total++;
+    if (r.freeMB == null) continue;
+    if (r.freeMB < 1024)  crit++;
+    if (r.freeMB < 5120)  warn++;
+    if (r.freeMB < 20480) watch++;
+    if (lowest == null || r.freeMB < lowest.freeMB) lowest = r;
+  }
+  $('dsTileTotal').textContent = total;
+  $('dsTileCrit').textContent  = crit;
+  $('dsTileWarn').textContent  = warn;
+  $('dsTileWatch').textContent = watch;
+  if (lowest) {
+    $('dsTileLowest').textContent = dsFormatMB(lowest.freeMB);
+    $('dsTileLowest').style.color = dsColorForFreeMB(lowest.freeMB);
+    $('dsTileLowestSub').textContent = 'on ' + (lowest.deviceName || '—');
+  } else {
+    $('dsTileLowest').textContent = '—';
+    $('dsTileLowest').style.color = 'var(--muted)';
+    $('dsTileLowestSub').textContent = 'on —';
+  }
+
+  // Disk health rate = devices with ≥20 GB free / total. Watch (<20 GB)
+  // is a strict superset of warn (<5 GB) and crit (<1 GB), so subtract it
+  // alone, not the sum. Null when storage hasn't loaded yet.
+  const rate = total === 0 ? null : ((total - watch) / total) * 100;
+  setGaugeKpi('dsHealthRing', 'dsHealthRate', rate, { thresholds: { good: 95, watch: 80 } });
+}
+
+function applyDiskspaceFilters(rows) {
+  const q = ($('diskspaceFilter').value || '').toLowerCase().trim();
+  const bandRaw = $('diskspaceBandFilter').value;
+  const band = bandRaw ? parseInt(bandRaw, 10) : null;
+  return rows.filter(r => {
+    if (band != null) {
+      if (r.freeMB == null || r.freeMB >= band) return false;
+    }
+    if (q) {
+      const hay = [r.deviceName, r.userPrincipalName, r.model, r.manufacturer].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+// Map tile-id → band value the tile filters to. Used for active-tile
+// highlighting and the click-to-toggle behaviour.
+const dsTileMap = {
+  dsTileTotal: '',
+  dsTileCrit:  '1024',
+  dsTileWarn:  '5120',
+  dsTileWatch: '20480'
+};
+
+function syncDiskspaceTileUi() {
+  const current = $('diskspaceBandFilter').value;
+  Object.keys(dsTileMap).forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    const tile = el.closest('.tile');
+    if (!tile) return;
+    const target = dsTileMap[id];
+    tile.classList.toggle('active', target !== '' && current === target);
+  });
+}
+
+function renderDiskspaceTable() {
+  const bandActive   = !!$('diskspaceBandFilter').value;
+  const searchActive = !!($('diskspaceFilter').value || '').trim();
+  $('btnDiskspaceClearKpi').style.display = (bandActive || searchActive) ? '' : 'none';
+  syncDiskspaceTileUi();
+
+  let rows = applyDiskspaceFilters(diskspaceRows);
+  const dir = diskspaceSortDir === 'asc' ? 1 : -1;
+  rows.sort((a, b) => {
+    let av, bv;
+    if (diskspaceSortKey === 'freeMB' || diskspaceSortKey === 'totalMB' || diskspaceSortKey === 'freePct') {
+      // numeric — push nulls to the bottom regardless of direction
+      av = a[diskspaceSortKey]; bv = b[diskspaceSortKey];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+    } else {
+      av = a[diskspaceSortKey] || ''; bv = b[diskspaceSortKey] || '';
+      if (typeof av === 'string') { av = av.toLowerCase(); bv = (bv || '').toString().toLowerCase(); }
+    }
+    if (av < bv) return -dir;
+    if (av > bv) return dir;
+    return (a.deviceName || '').toLowerCase().localeCompare((b.deviceName || '').toLowerCase());
+  });
+
+  const body = $('diskspaceRowsBody');
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--muted); padding:24px;">No devices match the current filters.</td></tr>`;
+  } else {
+    body.innerHTML = rows.map(r => {
+      const deviceCell = r.id
+        ? `<a href="https://intune.microsoft.com/#view/Microsoft_Intune_Devices/DeviceSettingsMenuBlade/~/overview/mdmDeviceId/${encodeURIComponent(r.id)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.deviceName) || '—'}</a>`
+        : (esc(r.deviceName) || '—');
+      const color = dsColorForFreeMB(r.freeMB);
+      const pct = r.freePct == null ? '—' : r.freePct.toFixed(1) + '%';
+      return `
+        <tr>
+          <td>${deviceCell}</td>
+          <td>${esc(r.userPrincipalName) || '—'}</td>
+          <td>${esc(r.osVersion) || '—'}</td>
+          <td>${esc(r.model) || '—'}</td>
+          <td style="color:${color}; font-weight:600;">${dsFormatMB(r.freeMB)}</td>
+          <td>${dsFormatMB(r.totalMB)}</td>
+          <td>${pct}</td>
+          <td class="date">${r.lastSync ? new Date(r.lastSync).toLocaleString() : '—'}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+  $('diskspaceCount').textContent = rows.length;
+}
+
+function exportDiskspaceCsv() {
+  const rows = applyDiskspaceFilters(diskspaceRows);
+  const header = ['DeviceName','User','OSVersion','Manufacturer','Model','FreeMB','TotalMB','FreePct','LastSync'];
+  const lines = [header.join(',')].concat(rows.map(r => [
+    r.deviceName, r.userPrincipalName, r.osVersion, r.manufacturer, r.model,
+    r.freeMB == null ? '' : r.freeMB,
+    r.totalMB == null ? '' : r.totalMB,
+    r.freePct == null ? '' : r.freePct.toFixed(2),
+    r.lastSync
+  ].map(escCsv).join(',')));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `disk-space-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+$('diskspaceFilter').addEventListener('input', renderDiskspaceTable);
+$('diskspaceBandFilter').addEventListener('change', renderDiskspaceTable);
+$('btnDiskspaceRefresh').addEventListener('click', () => loadDiskspace(true));
+$('btnDiskspaceExport').addEventListener('click', exportDiskspaceCsv);
+$('btnDiskspaceClearKpi').addEventListener('click', () => {
+  $('diskspaceBandFilter').value = '';
+  $('diskspaceFilter').value = '';
+  $('diskspaceFilter').dispatchEvent(new Event('input', { bubbles: true }));
+  renderDiskspaceTable();
+});
+
+document.querySelectorAll('[data-ds-tile]').forEach(tile => {
+  tile.addEventListener('click', () => {
+    const target = tile.dataset.dsTile;
+    const current = $('diskspaceBandFilter').value;
+    // Total tile ('') always clears; other tiles toggle off when already active.
+    $('diskspaceBandFilter').value = (target !== '' && current === target) ? '' : target;
+    renderDiskspaceTable();
+  });
+});
+
+document.querySelectorAll('#intuneSubDiskspace th[data-dsort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.dsort;
+    if (diskspaceSortKey === key) diskspaceSortDir = diskspaceSortDir === 'asc' ? 'desc' : 'asc';
+    else {
+      diskspaceSortKey = key;
+      // Default to ascending for numeric so the worst row floats up.
+      diskspaceSortDir = (key === 'freeMB' || key === 'freePct' || key === 'totalMB') ? 'asc' : 'desc';
+    }
+    renderDiskspaceTable();
+  });
+});
+
+// ============================================================
+// Autopilot sub-tab — reconciliation
+// Joins /deviceManagement/windowsAutopilotDeviceIdentities with
+// managedDevices (by managedDeviceId presence) and Entra /devices
+// (by ZTDID extracted from physicalIds) to surface orphan records
+// after retirement/reimage, unassigned deployment profiles, and
+// duplicate Entra device objects. Hybrid Autopilot enrollment
+// legitimately creates one Entra-joined + one hybrid-joined record
+// per device — those are detected (trustType: AzureAd + ServerAd)
+// and hidden by default via the toggle.
+// ============================================================
+let autopilotLoaded = false;
+let autopilotRows = [];
+let autopilotV2Count = null;
+let autopilotSelected = new Set();
+let deviceLinkDevices = [];
+let deviceLinkAbort = null;
+let autopilotSortKey = 'lastContactedDateTime';
+let autopilotSortDir = 'desc';
+
+function autopilotStateOf(r, hideHybrid) {
+  if (r.orphan) return 'orphan';
+  if (r.noProfile) return 'noProfile';
+  if (r.duplicate && !(hideHybrid && r.isHybridDuplicate)) return 'duplicate';
+  return 'ok';
+}
+
+function autopilotStateBadge(state) {
+  const map = {
+    'orphan':    { label: 'Orphan',     bg: '#fdecec', border: '#f5b5b5', color: '#8a2020' },
+    'noProfile': { label: 'No profile', bg: '#fff8e6', border: '#f0d090', color: '#704500' },
+    'duplicate': { label: 'Duplicate',  bg: '#fff8e6', border: '#f0d090', color: '#704500' },
+    'ok':        { label: 'OK',         bg: '#e7f6ec', border: '#a7d7b5', color: '#1f5d33' }
+  };
+  const m = map[state] || map['ok'];
+  return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:${m.bg}; border:1px solid ${m.border}; color:${m.color};">${esc(m.label)}</span>`;
+}
+
+async function loadAutopilot(force = false) {
+  if (autopilotLoaded && !force) return;
+  $('autopilotLoading').style.display = '';
+  $('autopilotContent').style.display = 'none';
+  $('autopilotError').innerHTML = '';
+  try {
+    const [apDevices, mdDevices, entraDevices, v2Count] = await Promise.all([
+      graphGetAll('beta/deviceManagement/windowsAutopilotDeviceIdentities'),
+      graphGetAll(`beta/deviceManagement/managedDevices?$select=id,serialNumber&$filter=${encodeURIComponent("operatingSystem eq 'Windows'")}`),
+      // Entra fetch is best-effort — if the user denied Device.Read.All the
+      // Duplicate-Entra tile silently shows 0 and the rest still works.
+      graphGetAll(`v1.0/devices?$select=id,displayName,trustType,physicalIds`).catch(() => []),
+      graphGetAll('beta/deviceManagement/tenantAssociatedDevices?$select=id').then(rows => rows.length).catch(() => null)
+    ]);
+    autopilotV2Count = v2Count;
+
+    const mdById = new Set(mdDevices.map(d => d.id));
+
+    // Group Entra devices by ZTDID extracted from physicalIds.
+    // physicalIds entries look like: "[ZTDID]:{guid}", "[USER-HWID]:...", etc.
+    const entraByZtdid = new Map();
+    for (const e of entraDevices) {
+      for (const p of (e.physicalIds || [])) {
+        const m = /^\[ZTDID\]:(.+)$/i.exec(p);
+        if (m) {
+          const ztdid = m[1].trim().toLowerCase();
+          if (!entraByZtdid.has(ztdid)) entraByZtdid.set(ztdid, []);
+          entraByZtdid.get(ztdid).push(e);
+          break;
+        }
+      }
+    }
+
+    autopilotRows = apDevices.map(ap => {
+      const ztdid = (ap.id || '').trim().toLowerCase();
+      const matchingEntra = entraByZtdid.get(ztdid) || [];
+      const trustTypes = new Set(matchingEntra.map(e => e.trustType || ''));
+      const duplicate = matchingEntra.length > 1;
+      const isHybridDuplicate = duplicate && trustTypes.has('AzureAd') && trustTypes.has('ServerAd');
+      const assignmentStatus = (ap.deploymentProfileAssignmentStatus || '').toString();
+      return {
+        id: ap.id,
+        serialNumber: ap.serialNumber || '',
+        manufacturer: ap.manufacturer || '',
+        model: ap.model || '',
+        groupTag: ap.groupTag || '',
+        purchaseOrderIdentifier: ap.purchaseOrderIdentifier || '',
+        lastContactedDateTime: ap.lastContactedDateTime || '',
+        assignmentStatus,
+        enrollmentState: ap.enrollmentState || '',
+        managedDeviceId: ap.managedDeviceId || '',
+        azureActiveDirectoryDeviceId: ap.azureActiveDirectoryDeviceId || '',
+        orphan: !!ap.managedDeviceId && !mdById.has(ap.managedDeviceId),
+        noProfile: assignmentStatus.toLowerCase().startsWith('notassigned'),
+        duplicate,
+        isHybridDuplicate
+      };
+    });
+
+    autopilotLoaded = true;
+    $('autopilotLoading').style.display = 'none';
+    $('autopilotContent').style.display = '';
+    renderAutopilotTiles();
+    renderAutopilotTable();
+  } catch (e) {
+    console.error('Autopilot load failed', e);
+    $('autopilotLoading').style.display = 'none';
+    const msg = String(e && e.message || e);
+    const friendlyHint = /forbidden|insufficient|consent|scope/i.test(msg)
+      ? ' This sub-tab requires DeviceManagementServiceConfig.Read.All — sign out and back in to consent to the new scope.'
+      : '';
+    $('autopilotError').innerHTML = `<div class="error-banner">Failed to load Autopilot data: ${esc(msg)}.${friendlyHint}</div>`;
+  }
+}
+
+function renderAutopilotTiles() {
+  const hideHybrid = $('autopilotHideHybrid').checked;
+  let total = 0, orphan = 0, noProfile = 0, duplicate = 0, healthy = 0;
+  for (const r of autopilotRows) {
+    total++;
+    if (r.orphan) orphan++;
+    if (r.noProfile) noProfile++;
+    const dup = r.duplicate && !(hideHybrid && r.isHybridDuplicate);
+    if (dup) duplicate++;
+    if (!r.orphan && !r.noProfile && !dup) healthy++;
+  }
+  $('apTileV1').textContent = String(total);
+  $('apTileV2').textContent = autopilotV2Count == null ? '—' : String(autopilotV2Count);
+  $('apTileOrphan').textContent = orphan;
+  $('apTileNoProfile').textContent = noProfile;
+  $('apTileDuplicate').textContent = duplicate;
+  const rate = total === 0 ? null : (healthy / total) * 100;
+  setGaugeKpi('apHealthRing', 'apHealthRate', rate, { thresholds: { good: 95, watch: 80 } });
+}
+
+function applyAutopilotFilters(rows) {
+  const q = ($('autopilotFilter').value || '').toLowerCase().trim();
+  const state = $('autopilotStateFilter').value;
+  const hideHybrid = $('autopilotHideHybrid').checked;
+  return rows.filter(r => {
+    if (state) {
+      const s = autopilotStateOf(r, hideHybrid);
+      if (s !== state) return false;
+    }
+    if (q) {
+      const hay = [r.serialNumber, r.manufacturer, r.model, r.groupTag, r.purchaseOrderIdentifier].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+const apTileMap = {
+  apTileOrphan: 'orphan',
+  apTileNoProfile: 'noProfile',
+  apTileDuplicate: 'duplicate'
+};
+
+function syncAutopilotTileUi() {
+  const current = $('autopilotStateFilter').value;
+  Object.keys(apTileMap).forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    const tile = el.closest('.tile');
+    if (!tile) return;
+    const target = apTileMap[id];
+    tile.classList.toggle('active', target !== '' && current === target);
+  });
+}
+
+function renderAutopilotTable() {
+  const stateActive = !!$('autopilotStateFilter').value;
+  const searchActive = !!($('autopilotFilter').value || '').trim();
+  const orphanView = $('autopilotStateFilter').value === 'orphan';
+  if (!orphanView && autopilotSelected.size) autopilotSelected.clear();
+  $('btnAutopilotClearKpi').style.display = (stateActive || searchActive) ? '' : 'none';
+  $('apSelectCol').style.display = orphanView ? '' : 'none';
+  $('btnAutopilotSelectAll').style.display = orphanView ? '' : 'none';
+  $('btnAutopilotDelete').style.display = orphanView ? '' : 'none';
+  syncAutopilotTileUi();
+  const hideHybrid = $('autopilotHideHybrid').checked;
+  let rows = applyAutopilotFilters(autopilotRows);
+  const dir = autopilotSortDir === 'asc' ? 1 : -1;
+  rows.sort((a, b) => {
+    let av, bv;
+    if (autopilotSortKey === 'state') {
+      av = autopilotStateOf(a, hideHybrid); bv = autopilotStateOf(b, hideHybrid);
+    } else {
+      av = a[autopilotSortKey] || ''; bv = b[autopilotSortKey] || '';
+      if (typeof av === 'string') { av = av.toLowerCase(); bv = (bv || '').toString().toLowerCase(); }
+    }
+    if (av < bv) return -dir;
+    if (av > bv) return dir;
+    return (a.serialNumber || '').toLowerCase().localeCompare((b.serialNumber || '').toLowerCase());
+  });
+
+  const body = $('autopilotRowsBody');
+  const cols = orphanView ? 9 : 8;
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="${cols}" style="text-align:center; color:var(--muted); padding:24px;">No Autopilot devices match the current filters.</td></tr>`;
+  } else {
+    body.innerHTML = rows.map(r => {
+      const state = autopilotStateOf(r, hideHybrid);
+      // Serial deep-link: link to managed device blade when a live managedDevice exists,
+      // otherwise fall back to the Autopilot devices list view (per-Autopilot-id deep
+      // link is not a stable URL across Intune portal versions).
+      const liveManagedDevice = r.managedDeviceId && !r.orphan;
+      const serialUrl = liveManagedDevice
+        ? `https://intune.microsoft.com/#view/Microsoft_Intune_Devices/DeviceSettingsMenuBlade/~/overview/mdmDeviceId/${encodeURIComponent(r.managedDeviceId)}`
+        : `https://intune.microsoft.com/#view/Microsoft_Intune_Enrollment/AutopilotDevicesBlade`;
+      const serialCell = r.serialNumber
+        ? `<a href="${serialUrl}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.serialNumber)}</a>`
+        : '—';
+      const pick = orphanView
+        ? `<td><input type="checkbox" data-ap-select="${esc(r.id)}" ${autopilotSelected.has(r.id) ? 'checked' : ''} style="cursor:pointer;"></td>`
+        : '';
+      return `
+        <tr>
+          ${pick}
+          <td>${serialCell}</td>
+          <td>${esc(r.manufacturer) || '—'}</td>
+          <td>${esc(r.model) || '—'}</td>
+          <td>${esc(r.groupTag) || '—'}</td>
+          <td>${esc(r.purchaseOrderIdentifier) || '—'}</td>
+          <td>${esc(r.assignmentStatus) || '—'}</td>
+          <td class="date">${r.lastContactedDateTime ? new Date(r.lastContactedDateTime).toLocaleString() : '—'}</td>
+          <td>${autopilotStateBadge(state)}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+  $('autopilotCount').textContent = rows.length;
+  if (orphanView) {
+    const selectedHere = rows.filter(r => autopilotSelected.has(r.id)).length;
+    const allOn = rows.length > 0 && selectedHere === rows.length;
+    const sa = $('autopilotSelectAll');
+    sa.checked = allOn;
+    sa.indeterminate = selectedHere > 0 && !allOn;
+    $('btnAutopilotSelectAll').textContent = allOn ? 'Clear selection' : 'Select all';
+    $('btnAutopilotDelete').textContent = selectedHere ? `🗑 Delete selected (${selectedHere})` : '🗑 Delete selected';
+  }
+}
+
+function autopilotOrphanTargets() {
+  if ($('autopilotStateFilter').value !== 'orphan') return [];
+  const visible = new Set(applyAutopilotFilters(autopilotRows).map(r => r.id));
+  return autopilotRows.filter(r => r.orphan && r.id && autopilotSelected.has(r.id) && visible.has(r.id));
+}
+
+function setVisibleAutopilotSelection(on) {
+  for (const r of applyAutopilotFilters(autopilotRows)) {
+    if (!r.id) continue;
+    if (on) autopilotSelected.add(r.id);
+    else autopilotSelected.delete(r.id);
+  }
+  renderAutopilotTable();
+}
+
+// Removes the Autopilot registration only. Orphan means the Intune managed
+// device is already gone, so this does not retire a live PC.
+async function deleteSelectedAutopilotOrphans() {
+  const targets = autopilotOrphanTargets();
+  if (!targets.length) return;
+  const names = targets.map(r => r.serialNumber || r.id);
+  const preview = names.slice(0, 10).map(n => '  • ' + n).join('\n');
+  const more = names.length > 10 ? `\n  …and ${names.length - 10} more` : '';
+  if (!confirm(`Delete ${names.length} Autopilot registration${names.length === 1 ? '' : 's'}?\n\n${preview}${more}\n\nThis removes the Autopilot device record. The PC has to be registered again before Autopilot can deploy it. This cannot be undone from the dashboard.`)) return;
+
+  const btn = $('btnAutopilotDelete');
+  btn.style.pointerEvents = 'none';
+  let token;
+  try {
+    token = await ensureScopeToken('DeviceManagementServiceConfig.ReadWrite.All');
+  } catch (e) {
+    $('autopilotError').innerHTML = `<div class="error-banner">Consent for Autopilot deletion was not granted: ${esc(e.message || String(e))}</div>`;
+    btn.style.pointerEvents = '';
+    return;
+  }
+
+  let maaJustB64 = null;
+  let cancelled = false;
+  const deleted = [], queued = [], failed = [];
+  for (let i = 0; i < targets.length; i++) {
+    const r = targets[i];
+    btn.textContent = `🗑 Deleting ${i + 1}/${targets.length}…`;
+    const attempt = (headers = {}) => graphDelete('beta/deviceManagement/windowsAutopilotDeviceIdentities/' + encodeURIComponent(r.id), { token, headers });
+    try {
+      await attempt(maaJustB64 ? { 'x-msft-approval-justification': maaJustB64 } : {});
+      deleted.push(r);
+    } catch (e) {
+      if (e.isMaa && !maaJustB64) {
+        const just = prompt(`Multi-Admin Approval is required in this tenant. Enter one justification for deleting ${targets.length === 1 ? 'this Autopilot registration' : `these ${targets.length} Autopilot registrations`} (recorded in the audit log; ≤ 1024 chars):`);
+        if (!just) { cancelled = true; break; }
+        maaJustB64 = btoa(String.fromCharCode(...new TextEncoder().encode(just)));
+        try {
+          await attempt({ 'x-msft-approval-justification': maaJustB64 });
+          deleted.push(r);
+        } catch (e2) {
+          if (e2.status === 412 || e2.status === 409) queued.push(r);
+          else failed.push({ r, error: e2.message || String(e2) });
+        }
+      } else if (e.status === 412 || e.status === 409) {
+        queued.push(r);
+      } else {
+        failed.push({ r, error: e.message || String(e) });
+      }
+    }
+  }
+
+  const deletedIds = new Set(deleted.map(r => r.id));
+  if (deletedIds.size) autopilotRows = autopilotRows.filter(r => !deletedIds.has(r.id));
+  deleted.forEach(r => autopilotSelected.delete(r.id));
+  queued.forEach(r => autopilotSelected.delete(r.id));
+
+  const skipped = targets.length - deleted.length - queued.length - failed.length;
+  const parts = [];
+  if (deleted.length) parts.push(`Deleted ${deleted.length}: ${deleted.map(r => r.serialNumber || r.id).join(', ')}`);
+  if (queued.length) parts.push(`${queued.length} submitted for Multi-Admin Approval — approve under Tenant administration → Multi Admin Approval: ${queued.map(r => r.serialNumber || r.id).join(', ')}`);
+  if (failed.length) parts.push(`${failed.length} failed: ${failed.map(f => `${f.r.serialNumber || f.r.id} (${f.error})`).join('; ')}`);
+  if (skipped > 0) parts.push(`${cancelled ? 'Justification cancelled — ' : ''}${skipped} not attempted.`);
+  const cls = (failed.length || cancelled) ? 'error-banner' : 'notice-banner';
+  $('autopilotError').innerHTML = parts.length ? `<div class="${cls}">${parts.map(p => esc(p)).join('<br>')}</div>` : '';
+  btn.style.pointerEvents = '';
+  renderAutopilotTiles();
+  renderAutopilotTable();
+}
+
+function exportAutopilotCsv() {
+  const hideHybrid = $('autopilotHideHybrid').checked;
+  const rows = applyAutopilotFilters(autopilotRows);
+  const header = ['Serial','Manufacturer','Model','GroupTag','PurchaseOrder','AssignmentStatus','EnrollmentState','ManagedDeviceId','EntraDeviceId','LastContacted','State'];
+  const lines = [header.join(',')].concat(rows.map(r => [
+    r.serialNumber, r.manufacturer, r.model, r.groupTag, r.purchaseOrderIdentifier,
+    r.assignmentStatus, r.enrollmentState, r.managedDeviceId, r.azureActiveDirectoryDeviceId,
+    r.lastContactedDateTime, autopilotStateOf(r, hideHybrid)
+  ].map(escCsv).join(',')));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `autopilot-reconciliation-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+$('autopilotFilter').addEventListener('input', renderAutopilotTable);
+$('autopilotStateFilter').addEventListener('change', renderAutopilotTable);
+$('autopilotHideHybrid').addEventListener('change', () => { renderAutopilotTiles(); renderAutopilotTable(); });
+$('btnAutopilotRefresh').addEventListener('click', () => loadAutopilot(true));
+$('btnAutopilotExport').addEventListener('click', exportAutopilotCsv);
+$('btnAutopilotSelectAll').addEventListener('click', () => {
+  const rows = applyAutopilotFilters(autopilotRows);
+  const allOn = rows.length > 0 && rows.every(r => autopilotSelected.has(r.id));
+  setVisibleAutopilotSelection(!allOn);
+});
+$('autopilotSelectAll').addEventListener('change', e => setVisibleAutopilotSelection(e.target.checked));
+$('autopilotRowsBody').addEventListener('change', e => {
+  const id = e.target && e.target.dataset && e.target.dataset.apSelect;
+  if (!id) return;
+  if (e.target.checked) autopilotSelected.add(id);
+  else autopilotSelected.delete(id);
+  renderAutopilotTable();
+});
+$('btnAutopilotDelete').addEventListener('click', deleteSelectedAutopilotOrphans);
+$('btnAutopilotClearKpi').addEventListener('click', () => {
+  $('autopilotStateFilter').value = '';
+  $('autopilotFilter').value = '';
+  $('autopilotFilter').dispatchEvent(new Event('input', { bubbles: true }));
+  renderAutopilotTable();
+});
+
+document.querySelectorAll('[data-ap-tile]').forEach(tile => {
+  tile.addEventListener('click', () => {
+    const target = tile.dataset.apTile;
+    const current = $('autopilotStateFilter').value;
+    $('autopilotStateFilter').value = (target !== '' && current === target) ? '' : target;
+    renderAutopilotTable();
+  });
+});
+
+document.querySelectorAll('#intuneSubAutopilot th[data-apsort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.apsort;
+    if (autopilotSortKey === key) autopilotSortDir = autopilotSortDir === 'asc' ? 'desc' : 'asc';
+    else { autopilotSortKey = key; autopilotSortDir = 'desc'; }
+    renderAutopilotTable();
+  });
+});
+
+// Device Link CSV — the file Intune device association imports so an
+// Autopilot device preparation policy can apply a device name template.
+// Graph does not return the TPM-signed package. It lives inside the
+// Collect diagnostics zip (one CSV per device, bytes kept unchanged).
+const DEVICE_LINK_DOC = 'https://learn.microsoft.com/en-us/autopilot/device-preparation/tutorial/user-driven/entra-join-device-association';
+const AUTOPILOT_V2_URL = 'https://intune.microsoft.com/#view/Microsoft_Intune_Enrollment/AutopilotDevicesV2.ReactView/isReactView~/true';
+const DEVICE_LINK_MAX = 25;
+const DEVICE_LINK_PS = [
+  '# Elevated PowerShell on the PC. Copies the DeviceLink CSV to the clipboard.',
+  '$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
+  'if (-not $admin) { throw "Run this in an elevated PowerShell window." }',
+  '$dest = Join-Path $env:TEMP ("devicelink-" + [guid]::NewGuid().ToString("n"))',
+  'New-Item -ItemType Directory -Path $dest | Out-Null',
+  '$cab = Join-Path $dest "mdmlogs.cab"',
+  '& "$env:windir\\system32\\MdmDiagnosticsTool.exe" -area Autopilot -cab $cab',
+  'if (-not (Test-Path -LiteralPath $cab)) { throw "MdmDiagnosticsTool did not write a cabinet." }',
+  '$out = Join-Path $dest "expanded"',
+  'New-Item -ItemType Directory -Path $out | Out-Null',
+  'expand.exe $cab -F:* $out | Out-Null',
+  '$csv = Get-ChildItem -LiteralPath $out -Filter "*.devicelink.csv" | Select-Object -First 1',
+  'if (-not $csv) { throw "No .devicelink.csv in the cabinet. This Windows build does not write DeviceLink." }',
+  '$desktop = Join-Path ([Environment]::GetFolderPath("Desktop")) $csv.Name',
+  'Copy-Item -LiteralPath $csv.FullName -Destination $desktop -Force',
+  'Get-Content -LiteralPath $csv.FullName -Raw | Set-Clipboard',
+  'Write-Output "Copied $($csv.Name) to the clipboard and to $desktop. Paste it into THE Intune Dashboard."'
+].join('\n');
+
+function splitCsvLine(line) {
+  const out = [];
+  let cur = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quoted) {
+      if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      else if (c === '"') quoted = false;
+      else cur += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ',') { out.push(cur); cur = ''; }
+    else cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
+function parseDeviceLinkPaste(text) {
+  const clean = String(text || '').replace(/^\uFEFF/, '').trim();
+  if (!clean) throw new Error('Paste the DeviceLink CSV first.');
+  const lines = clean.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length === 1 && !/serial/i.test(lines[0]) && lines[0].length > 80) {
+    return { serial: '', data: lines[0].trim() };
+  }
+  const header = splitCsvLine(lines[0]);
+  const dataIdx = header.findIndex(h => /^data$/i.test(String(h).trim()));
+  const serialIdx = header.findIndex(h => /serial/i.test(h));
+  if (dataIdx < 0) throw new Error('That paste has no Data column. Paste the .devicelink.csv from the script.');
+  if (lines.length < 2) throw new Error('The CSV has a header and no device row.');
+  const row = splitCsvLine(lines[1]);
+  const data = String(row[dataIdx] || '').trim();
+  if (!data) throw new Error('The Data column is empty.');
+  return { serial: serialIdx >= 0 ? String(row[serialIdx] || '').trim() : '', data };
+}
+
+function decodeDeviceLinkBytes(data) {
+  if (data.length >= 2 && data[0] === 0xFF && data[1] === 0xFE) return new TextDecoder('utf-16le').decode(data);
+  if (data.length >= 2 && data[0] === 0xFE && data[1] === 0xFF) return new TextDecoder('utf-16be').decode(data);
+  return new TextDecoder('utf-8').decode(data);
+}
+
+function closeDeviceLinkModal() {
+  $('deviceLinkModal').classList.remove('show');
+  if (deviceLinkAbort) { try { deviceLinkAbort.abort(); } catch (_) {} }
+}
+
+function deviceLinkOsReady(osVersion) {
+  const m = String(osVersion || '').match(/10\.0\.(\d+)\.(\d+)/);
+  if (!m) return false;
+  const build = +m[1];
+  const rev = +m[2];
+  if (build === 26100 || build === 26200) return rev >= 9278;
+  return build > 26200;
+}
+
+function crc32(data) {
+  if (!crc32.table) {
+    const t = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 8);
+      t[i] = c;
+    }
+    crc32.table = t;
+  }
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < data.length; i++) c = crc32.table[(c ^ data[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function zipStore(files) {
+  const enc = new TextEncoder();
+  const parts = [];
+  const centrals = [];
+  let offset = 0;
+  for (const f of files) {
+    const nameBytes = enc.encode(f.name);
+    const crc = crc32(f.data);
+    const local = new Uint8Array(30 + nameBytes.length);
+    const v = new DataView(local.buffer);
+    v.setUint32(0, 0x04034b50, true);
+    v.setUint16(4, 20, true);
+    v.setUint32(14, crc, true);
+    v.setUint32(18, f.data.length, true);
+    v.setUint32(22, f.data.length, true);
+    v.setUint16(26, nameBytes.length, true);
+    local.set(nameBytes, 30);
+    parts.push(local, f.data);
+    const central = new Uint8Array(46 + nameBytes.length);
+    const cd = new DataView(central.buffer);
+    cd.setUint32(0, 0x02014b50, true);
+    cd.setUint16(4, 20, true);
+    cd.setUint16(6, 20, true);
+    cd.setUint32(16, crc, true);
+    cd.setUint32(20, f.data.length, true);
+    cd.setUint32(24, f.data.length, true);
+    cd.setUint16(28, nameBytes.length, true);
+    cd.setUint32(42, offset, true);
+    central.set(nameBytes, 46);
+    centrals.push(central);
+    offset += local.length + f.data.length;
+  }
+  const centralSize = centrals.reduce((s, c) => s + c.length, 0);
+  const eocd = new Uint8Array(22);
+  const e = new DataView(eocd.buffer);
+  e.setUint32(0, 0x06054b50, true);
+  e.setUint16(8, files.length, true);
+  e.setUint16(10, files.length, true);
+  e.setUint32(12, centralSize, true);
+  e.setUint32(16, offset, true);
+  return new Blob([...parts, ...centrals, eocd], { type: 'application/zip' });
+}
+
+function downloadBytes(data, filename, type) {
+  const blob = data instanceof Blob ? data : new Blob([data], { type: type || 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function findZipEocd(bytes) {
+  const min = Math.max(0, bytes.length - 22 - 65535);
+  for (let i = bytes.length - 22; i >= min; i--) {
+    if (bytes[i] === 0x50 && bytes[i + 1] === 0x4b && bytes[i + 2] === 0x05 && bytes[i + 3] === 0x06) return i;
+  }
+  return -1;
+}
+
+async function zipEntries(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const eocd = findZipEocd(bytes);
+  if (eocd < 0) throw new Error('Not a zip file');
+  const count = view.getUint16(eocd + 10, true);
+  let cdOff = view.getUint32(eocd + 16, true);
+  if (cdOff === 0xFFFFFFFF) throw new Error('ZIP64 diagnostics packages are not supported');
+  const out = [];
+  for (let n = 0; n < count; n++) {
+    if (cdOff + 46 > bytes.length || view.getUint32(cdOff, true) !== 0x02014b50) break;
+    const method = view.getUint16(cdOff + 10, true);
+    const compSize = view.getUint32(cdOff + 20, true);
+    const nameLen = view.getUint16(cdOff + 28, true);
+    const extraLen = view.getUint16(cdOff + 30, true);
+    const commentLen = view.getUint16(cdOff + 32, true);
+    const localOff = view.getUint32(cdOff + 42, true);
+    const name = new TextDecoder('utf-8').decode(bytes.subarray(cdOff + 46, cdOff + 46 + nameLen));
+    cdOff += 46 + nameLen + extraLen + commentLen;
+    if (!name || name.endsWith('/')) continue;
+    if (localOff + 30 > bytes.length) continue;
+    const localNameLen = view.getUint16(localOff + 26, true);
+    const localExtraLen = view.getUint16(localOff + 28, true);
+    const dataOff = localOff + 30 + localNameLen + localExtraLen;
+    const comp = bytes.subarray(dataOff, dataOff + compSize);
+    let data = null;
+    if (method === 0) data = comp.slice();
+    else if (method === 8 && typeof DecompressionStream !== 'undefined') {
+      try {
+        const stream = new Blob([comp]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+        data = new Uint8Array(await new Response(stream).arrayBuffer());
+      } catch (_) { data = null; }
+    }
+    if (data) out.push({ name, data });
+  }
+  return out;
+}
+
+function csvHeadText(data) {
+  const head = data.subarray(0, Math.min(data.length, 4096));
+  if (head.length >= 2 && head[0] === 0xFF && head[1] === 0xFE) return new TextDecoder('utf-16le').decode(head);
+  if (head.length >= 2 && head[0] === 0xFE && head[1] === 0xFF) return new TextDecoder('utf-16be').decode(head);
+  return new TextDecoder('utf-8', { fatal: false }).decode(head);
+}
+
+function isDeviceLinkCsv(name, data) {
+  if (/\.csv$/i.test(name) && /devicelink/i.test(name)) return true;
+  if (!/\.csv$/i.test(name)) return false;
+  const line = (csvHeadText(data).split(/\r?\n/)[0] || '');
+  return /(^|,)\s*Data\s*(,|$)/i.test(line) || /devicelink/i.test(line);
+}
+
+// Intune Collect diagnostics does not leave the DeviceLink CSV at the zip root.
+// MdmDiagnosticsTool writes it into an LZX cabinet, mdmlogs-*.cab.
+// The cabinet directory is uncompressed, so the filename can be read here.
+// The file bytes stay LZX-compressed; the page does not unpack those.
+function cabFileNames(data) {
+  if (!data || data.length < 36) return [];
+  if (data[0] !== 0x4D || data[1] !== 0x53 || data[2] !== 0x43 || data[3] !== 0x46) return [];
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const coffFiles = view.getUint32(16, true);
+  const cFiles = view.getUint16(28, true);
+  if (coffFiles < 36 || coffFiles >= data.length || cFiles < 1 || cFiles > 100000) return [];
+  const names = [];
+  let p = coffFiles;
+  const dec = new TextDecoder('utf-8');
+  for (let i = 0; i < cFiles && p + 17 < data.length; i++) {
+    p += 16;
+    let end = p;
+    while (end < data.length && data[end] !== 0) end++;
+    names.push(dec.decode(data.subarray(p, end)));
+    p = end + 1;
+  }
+  return names;
+}
+
+function deviceLinkNamesInCab(data) {
+  return cabFileNames(data).filter(n => /devicelink/i.test(n) && /\.csv$/i.test(n));
+}
+
+async function extractDeviceLinkFiles(arrayBuffer, label) {
+  const found = [];
+  const otherCsv = [];
+  const cabHits = [];
+  async function walk(buf, prefix) {
+    const entries = await zipEntries(buf);
+    for (const entry of entries) {
+      const base = entry.name.split(/[/\\]/).pop();
+      if (/\.zip$/i.test(base)) {
+        try { await walk(entry.data.buffer.slice(entry.data.byteOffset, entry.data.byteOffset + entry.data.byteLength), prefix + base + '/'); } catch (_) {}
+        continue;
+      }
+      if (/\.cab$/i.test(base)) {
+        const names = deviceLinkNamesInCab(entry.data);
+        if (names.length) cabHits.push(prefix + base + ' → ' + names.join(', '));
+        continue;
+      }
+      if (isDeviceLinkCsv(base, entry.data)) found.push({ name: base, data: entry.data, source: label });
+      else if (/\.csv$/i.test(base)) otherCsv.push(prefix + base);
+    }
+  }
+  await walk(arrayBuffer, '');
+  return { found, otherCsv, cabHits };
+}
+
+function deviceLinkMissNote(extracted, label) {
+  if (extracted.cabHits && extracted.cabHits.length) {
+    return `${label}: the DeviceLink CSV is inside a cabinet, not loose in the zip (${extracted.cabHits.join('; ')}). Open that .cab and drop the .devicelink.csv here.`;
+  }
+  const sample = (extracted.otherCsv || []).slice(0, 4).join(', ');
+  if (sample) return `${label} has no DeviceLink CSV. Other CSV files: ${sample}.`;
+  return `${label} has no DeviceLink CSV.`;
+}
+
+function safeFilePart(s) {
+  return String(s || 'device').replace(/[^\w.\-]+/g, '_').replace(/^\.+/, '').slice(0, 80) || 'device';
+}
+
+function renderDeviceLinkResults(files, note) {
+  const box = $('deviceLinkResults');
+  if (!box) return;
+  if (!files.length) {
+    box.innerHTML = `<div class="error-banner">${esc(note || 'No DeviceLink CSV in that package.')}</div>`;
+    return;
+  }
+  const rows = files.map((f, i) => `
+    <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; padding:8px 0; border-bottom:1px solid var(--line);">
+      <div>
+        <div style="font-weight:600;">${esc(f.name)}</div>
+        <div style="font-size:12px; color:var(--muted);">${esc(f.source || '')} · ${(f.data.length / 1024).toFixed(1)} KB · unchanged</div>
+      </div>
+      <span data-dl-download="${i}" style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; white-space:nowrap;">Download</span>
+    </div>`).join('');
+  const all = files.length > 1
+    ? `<div style="padding-top:10px;"><span id="deviceLinkDownloadAll" style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;">Download all ${files.length} files</span></div>`
+    : '';
+  box.innerHTML = `
+    <div style="font-size:13px; margin:8px 0 4px;">${esc(note || 'Import each file on its own. Intune accepts one device per CSV.')}</div>
+    ${rows}${all}
+    <div style="font-size:12px; color:var(--muted); margin-top:10px;">Paste the CSV above and choose <strong>Upload to Autopilot v2</strong>. The record shows up on <a href="${AUTOPILOT_V2_URL}" target="_blank" rel="noopener noreferrer">Autopilot devices</a>. <a href="${DEVICE_LINK_DOC}" target="_blank" rel="noopener noreferrer">Microsoft’s steps</a>.</div>`;
+  box.querySelectorAll('[data-dl-download]').forEach(el => {
+    el.addEventListener('click', () => {
+      const f = files[+el.dataset.dlDownload];
+      const name = /devicelink/i.test(f.name) ? f.name : safeFilePart(f.name.replace(/\.csv$/i, '')) + '.devicelink.csv';
+      downloadBytes(f.data, name, 'text/csv');
+    });
+  });
+  const allBtn = $('deviceLinkDownloadAll');
+  if (allBtn) allBtn.addEventListener('click', () => {
+    const packed = files.map((f, i) => ({
+      name: /devicelink/i.test(f.name) ? f.name : (safeFilePart(f.source || f.name) + '-' + (i + 1) + '.devicelink.csv'),
+      data: f.data
+    }));
+    downloadBytes(zipStore(packed), 'devicelink-csv.zip', 'application/zip');
+  });
+}
+
+async function acceptDeviceLinkDrop(fileList) {
+  const box = $('deviceLinkResults');
+  const files = [...fileList];
+  if (!files.length) return;
+  if (box) box.innerHTML = `<div style="color:var(--muted); font-size:13px;">Reading ${files.length} file${files.length === 1 ? '' : 's'}…</div>`;
+  const found = [];
+  const notes = [];
+  for (const file of files) {
+    const buf = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    if (/\.cab$/i.test(file.name) || (bytes.length >= 4 && bytes[0] === 0x4D && bytes[1] === 0x53 && bytes[2] === 0x43 && bytes[3] === 0x46)) {
+      const names = deviceLinkNamesInCab(bytes);
+      notes.push(names.length
+        ? `${file.name} contains ${names.join(', ')}. This cabinet is LZX-compressed, so open it and drop that CSV here.`
+        : `${file.name} is a cabinet and has no DeviceLink CSV in its file list.`);
+      continue;
+    }
+    if (/\.csv$/i.test(file.name) || isDeviceLinkCsv(file.name, bytes)) {
+      if (isDeviceLinkCsv(file.name.endsWith('.csv') ? file.name : file.name + '.csv', bytes) || /devicelink/i.test(file.name)) {
+        found.push({ name: file.name, data: bytes, source: file.name });
+      } else notes.push(`${file.name} is a CSV but not a DeviceLink file.`);
+      continue;
+    }
+    try {
+      const extracted = await extractDeviceLinkFiles(buf, file.name);
+      found.push(...extracted.found);
+      if (!extracted.found.length) notes.push(deviceLinkMissNote(extracted, file.name));
+    } catch (e) {
+      notes.push(`${file.name}: ${e.message || e}`);
+    }
+  }
+  if (found.length) {
+    const box = $('deviceLinkPaste');
+    if (box) box.value = decodeDeviceLinkBytes(found[0].data).replace(/^\uFEFF/, '');
+  }
+  renderDeviceLinkResults(found, notes.join(' '));
+}
+
+function deviceLinkFiltered() {
+  const q = ($('deviceLinkSearch') && $('deviceLinkSearch').value || '').toLowerCase().trim();
+  return deviceLinkDevices.filter(d => !q || `${d.deviceName} ${d.serialNumber} ${d.model} ${d.userPrincipalName}`.toLowerCase().includes(q));
+}
+
+function renderDeviceLinkDevices() {
+  const body = $('deviceLinkDeviceBody');
+  if (!body) return;
+  const rows = deviceLinkFiltered();
+  body.innerHTML = rows.map(d => {
+    const ready = deviceLinkOsReady(d.osVersion);
+    return `<tr>
+      <td><input type="checkbox" data-dl-id="${esc(d.id)}" ${d.selected ? 'checked' : ''}></td>
+      <td>${esc(d.deviceName) || '—'}</td>
+      <td>${esc(d.serialNumber) || '—'}</td>
+      <td>${esc(d.model) || '—'}</td>
+      <td class="date">${d.lastSyncDateTime ? new Date(d.lastSyncDateTime).toLocaleString() : '—'}</td>
+      <td style="font-size:12px; color:${ready ? 'var(--good, #1f7a3a)' : 'var(--muted)'};">${ready ? 'Ready' : 'Check build'}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="6" style="padding:12px; color:var(--muted);">No Windows devices match.</td></tr>`;
+  const n = deviceLinkDevices.filter(d => d.selected).length;
+  const count = $('deviceLinkSelectedCount');
+  if (count) count.textContent = String(n);
+}
+
+async function loadDeviceLinkPolicies() {
+  const sel = $('deviceLinkPolicy');
+  if (!sel) return;
+  try {
+    const rows = await graphGetAll('beta/deviceManagement/configurationPolicies?$select=id,name,technologies&$filter=' + encodeURIComponent("platforms eq 'windows10' and technologies eq 'enrollment'"));
+    const policies = (rows || []).filter(p => p && p.id).sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+    for (const p of policies) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name || p.id;
+      sel.appendChild(opt);
+    }
+  } catch (_) { /* upload still works with no policy selected */ }
+}
+
+async function uploadDeviceLinkPaste() {
+  const status = $('deviceLinkUploadStatus');
+  if (status) status.textContent = 'Uploading…';
+  try {
+    const parsed = parseDeviceLinkPaste($('deviceLinkPaste').value);
+    const token = await ensureScopeToken('DeviceManagementServiceConfig.ReadWrite.All');
+    const policyId = ($('deviceLinkPolicy') && $('deviceLinkPolicy').value) || '';
+    let res;
+    let policyNote = '';
+    try {
+      const body = { deviceLink: parsed.data };
+      if (policyId) body.devicePreparationPolicyId = policyId;
+      res = await graphPost('beta/deviceManagement/tenantAssociatedDevices/importTenantAssociatedDevice', body, { token });
+    } catch (err) {
+      if (!policyId || !/Graph 400/.test(String(err && err.message))) throw err;
+      res = await graphPost('beta/deviceManagement/tenantAssociatedDevices/importTenantAssociatedDevice', { deviceLink: parsed.data }, { token });
+      policyNote = ' The policy was not attached on this call. Assign it on the Autopilot devices page.';
+    }
+    const serial = (res && res.serialNumber) || parsed.serial || 'device';
+    const state = (res && (res.associationState || res.status)) || 'imported';
+    if (status) status.innerHTML = `${esc(serial)} uploaded. State: ${esc(String(state))}.${esc(policyNote)} <a href="${AUTOPILOT_V2_URL}" target="_blank" rel="noopener noreferrer">Open Autopilot devices</a>`;
+  } catch (err) {
+    if (status) status.textContent = (err && err.message) || String(err);
+  }
+}
+
+async function openDeviceLinkModal() {
+  $('deviceLinkModal').classList.add('show');
+  $('deviceLinkBody').innerHTML = `
+    <div style="font-size:13px; line-height:1.45; margin-bottom:12px;">Run the script on the PC, paste the CSV here, and upload it straight to <a href="${AUTOPILOT_V2_URL}" target="_blank" rel="noopener noreferrer">Autopilot devices</a>. That pre-association is what lets a device preparation name template apply. One device per paste.</div>
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:6px;">
+      <h4 style="margin:0; font-size:13px;">1. Create the file</h4>
+      <span id="btnDeviceLinkCopyPs" style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;">Copy PowerShell</span>
+    </div>
+    <pre id="deviceLinkPs" style="margin:0 0 14px; max-height:140px; overflow:auto; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px; font-size:11px; line-height:1.4; white-space:pre-wrap;"></pre>
+    <h4 style="margin:0 0 6px; font-size:13px;">2. Paste and upload</h4>
+    <textarea id="deviceLinkPaste" placeholder="Paste the .devicelink.csv here" style="width:100%; min-height:88px; box-sizing:border-box; font-family:ui-monospace,monospace; font-size:11px; border:1px solid var(--line); border-radius:8px; padding:8px; background:var(--card); color:var(--ink);"></textarea>
+    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+      <label style="font-size:12px; color:var(--muted);">Device preparation policy
+        <select id="deviceLinkPolicy" class="filter-select" style="margin-left:6px; max-width:280px;">
+          <option value="">None — assign on the Autopilot devices page</option>
+        </select>
+      </label>
+      <span id="btnDeviceLinkUpload" style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;">Upload to Autopilot v2</span>
+    </div>
+    <div id="deviceLinkUploadStatus" style="font-size:12px; margin-top:6px;"></div>
+    <div id="deviceLinkDrop" style="border:1.5px dashed var(--line); border-radius:10px; padding:14px; text-align:center; color:var(--muted); font-size:13px; margin:14px 0 8px;">
+      Drop a <strong>.devicelink.csv</strong>, a diagnostics <strong>.zip</strong>, or the <strong>.cab</strong>
+      <div style="margin-top:8px;"><input type="file" id="deviceLinkFile" accept=".zip,.csv,.cab" multiple style="font-size:12px;"></div>
+    </div>
+    <div id="deviceLinkResults"></div>
+    <h4 style="margin:18px 0 8px; font-size:13px;">Collect from enrolled Windows devices</h4>
+    <div style="font-size:12px; color:var(--muted); margin-bottom:8px;">Up to ${DEVICE_LINK_MAX} at a time. The device has to be online. <strong>Ready</strong> means Windows 11 24H2/25H2 build 26100.9278 / 26200.9278 or later (KB5120998), which is the build that writes DeviceLink. First collect asks for <code>DeviceManagementManagedDevices.ReadWrite.All</code>.</div>
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+      <input type="text" class="search" id="deviceLinkSearch" placeholder="Search name, serial, model…" style="min-width:220px;">
+      <label style="font-size:12px; color:var(--muted); display:inline-flex; gap:6px; align-items:center;"><input type="checkbox" id="deviceLinkReuse" checked> Reuse a completed package when one is still available</label>
+    </div>
+    <div id="deviceLinkDeviceLoading" style="color:var(--muted); font-size:13px;">Loading Windows devices…</div>
+    <div id="deviceLinkDeviceError"></div>
+    <div id="deviceLinkDeviceWrap" style="display:none; max-height:280px; overflow:auto; border:1px solid var(--line); border-radius:8px;">
+      <table>
+        <thead><tr>
+          <th style="width:36px;"><input type="checkbox" id="deviceLinkSelectVisible" title="Select shown devices"></th>
+          <th>Device</th><th>Serial</th><th>Model</th><th>Last check-in</th><th>DeviceLink OS</th>
+        </tr></thead>
+        <tbody id="deviceLinkDeviceBody"></tbody>
+      </table>
+    </div>
+    <div style="display:flex; gap:14px; align-items:center; margin-top:10px;">
+      <span id="btnDeviceLinkCollect" style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;">Collect diagnostics</span>
+      <span style="font-size:12px; color:var(--muted);"><span id="deviceLinkSelectedCount">0</span> selected</span>
+      <span id="btnDeviceLinkCancel" style="cursor:pointer; color:var(--muted); font-weight:600; font-size:13px; display:none;">Cancel</span>
+    </div>
+    <div id="deviceLinkLog" style="font-size:12px; margin-top:8px;"></div>`;
+
+  $('deviceLinkPs').textContent = DEVICE_LINK_PS;
+  $('btnDeviceLinkCopyPs').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(DEVICE_LINK_PS);
+      $('btnDeviceLinkCopyPs').textContent = 'Copied';
+    } catch (_) {
+      $('btnDeviceLinkCopyPs').textContent = 'Select the script and copy it';
+    }
+  });
+  $('btnDeviceLinkUpload').addEventListener('click', uploadDeviceLinkPaste);
+  loadDeviceLinkPolicies();
+
+  const drop = $('deviceLinkDrop');
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.style.borderColor = 'var(--accent)'; });
+  drop.addEventListener('dragleave', () => { drop.style.borderColor = 'var(--line)'; });
+  drop.addEventListener('drop', e => {
+    e.preventDefault();
+    drop.style.borderColor = 'var(--line)';
+    if (e.dataTransfer && e.dataTransfer.files) acceptDeviceLinkDrop(e.dataTransfer.files);
+  });
+  $('deviceLinkFile').addEventListener('change', e => acceptDeviceLinkDrop(e.target.files));
+  $('deviceLinkSearch').addEventListener('input', renderDeviceLinkDevices);
+  $('deviceLinkDeviceBody').addEventListener('change', e => {
+    const id = e.target && e.target.dataset && e.target.dataset.dlId;
+    if (!id) return;
+    const row = deviceLinkDevices.find(d => d.id === id);
+    if (row) row.selected = e.target.checked;
+    renderDeviceLinkDevices();
+  });
+  $('deviceLinkSelectVisible').addEventListener('change', e => {
+    const on = e.target.checked;
+    const visible = new Set(deviceLinkFiltered().map(d => d.id));
+    let selected = deviceLinkDevices.filter(d => d.selected).length;
+    for (const d of deviceLinkDevices) {
+      if (!visible.has(d.id)) continue;
+      if (on && !d.selected) {
+        if (selected >= DEVICE_LINK_MAX) break;
+        d.selected = true;
+        selected++;
+      } else if (!on) d.selected = false;
+    }
+    renderDeviceLinkDevices();
+  });
+  $('btnDeviceLinkCollect').addEventListener('click', collectDeviceLinkPackages);
+  $('btnDeviceLinkCancel').addEventListener('click', () => { if (deviceLinkAbort) deviceLinkAbort.abort(); });
+
+  try {
+    const devices = await graphGetAll(`beta/deviceManagement/managedDevices?$filter=${encodeURIComponent("operatingSystem eq 'Windows'")}&$select=id,deviceName,serialNumber,model,osVersion,lastSyncDateTime,userPrincipalName`);
+    deviceLinkDevices = devices.map(d => ({ ...d, selected: false }))
+      .sort((a, b) => String(a.deviceName || '').localeCompare(String(b.deviceName || '')));
+    $('deviceLinkDeviceLoading').style.display = 'none';
+    $('deviceLinkDeviceWrap').style.display = '';
+    renderDeviceLinkDevices();
+  } catch (e) {
+    $('deviceLinkDeviceLoading').style.display = 'none';
+    $('deviceLinkDeviceError').innerHTML = `<div class="error-banner">Could not list devices: ${esc(e.message || e)}. You can still drop a diagnostics zip above.</div>`;
+  }
+}
+
+function deviceLinkLog(html) {
+  const el = $('deviceLinkLog');
+  if (el) el.insertAdjacentHTML('beforeend', `<div>${html}</div>`);
+}
+
+async function latestDeviceLinkPackage(deviceId, token, signal) {
+  const rows = await graphGetAll(`beta/deviceManagement/managedDevices/${encodeURIComponent(deviceId)}/logCollectionRequests`, { token, signal });
+  const now = Date.now();
+  return rows
+    .filter(r => r && String(r.status).toLowerCase() === 'completed')
+    .filter(r => !r.expirationDateTimeUTC || Date.parse(r.expirationDateTimeUTC) > now)
+    .sort((a, b) => (Date.parse(b.receivedDateTimeUTC || b.requestedDateTimeUTC || 0) || 0) - (Date.parse(a.receivedDateTimeUTC || a.requestedDateTimeUTC || 0) || 0))[0] || null;
+}
+
+async function collectDeviceLinkPackages() {
+  const chosen = deviceLinkDevices.filter(d => d.selected).slice(0, DEVICE_LINK_MAX);
+  const log = $('deviceLinkLog');
+  if (log) log.innerHTML = '';
+  if (!chosen.length) {
+    deviceLinkLog(`<span style="color:var(--muted);">Select at least one device.</span>`);
+    return;
+  }
+  if (deviceLinkAbort) deviceLinkAbort.abort();
+  deviceLinkAbort = new AbortController();
+  const signal = deviceLinkAbort.signal;
+  const cancel = $('btnDeviceLinkCancel');
+  if (cancel) cancel.style.display = '';
+  try {
+    const token = await ensureScopeToken('DeviceManagementManagedDevices.ReadWrite.All');
+    const reuse = $('deviceLinkReuse') && $('deviceLinkReuse').checked;
+    const gathered = [];
+    for (const device of chosen) {
+      if (signal.aborted) break;
+      const label = esc(device.deviceName || device.serialNumber || device.id);
+      deviceLinkLog(`<span>${label} — requesting diagnostics…</span>`);
+      try {
+        let request = reuse ? await latestDeviceLinkPackage(device.id, token, signal) : null;
+        if (request) deviceLinkLog(`<span>${label} — using the completed package from ${esc(new Date(request.receivedDateTimeUTC || request.requestedDateTimeUTC).toLocaleString())}.</span>`);
+        if (!request) {
+          const created = await graphPost(
+            `beta/deviceManagement/managedDevices/${encodeURIComponent(device.id)}/createDeviceLogCollectionRequest`,
+            { templateType: { templateType: 'predefined' } },
+            { token, signal }
+          );
+          request = (created && created.id) ? created : (created && created.value) || created;
+          const deadline = Date.now() + 8 * 60 * 1000;
+          while (request && String(request.status).toLowerCase() !== 'completed') {
+            if (String(request.status).toLowerCase() === 'failed') throw new Error('Collection failed on the device');
+            if (Date.now() > deadline) throw new Error('Still pending after 8 minutes. Leave the device online and try again with “reuse” checked.');
+            await new Promise((resolve, reject) => {
+              const t = setTimeout(resolve, 15000);
+              signal.addEventListener('abort', () => { clearTimeout(t); reject(Object.assign(new Error('Aborted'), { name: 'AbortError' })); }, { once: true });
+            });
+            request = await graphGet(
+              `beta/deviceManagement/managedDevices/${encodeURIComponent(device.id)}/logCollectionRequests/${encodeURIComponent(request.id)}`,
+              { token, signal }
+            );
+          }
+        }
+        const urlRes = await graphPost(
+          `beta/deviceManagement/managedDevices/${encodeURIComponent(device.id)}/logCollectionRequests/${encodeURIComponent(request.id)}/createDownloadUrl`,
+          undefined,
+          { token, signal }
+        );
+        const url = urlRes && (urlRes.value || urlRes);
+        if (!url || typeof url !== 'string') throw new Error('Graph did not return a download URL');
+        try {
+          const res = await fetch(url, { signal });
+          if (!res.ok) throw new Error('Download HTTP ' + res.status);
+          const extracted = await extractDeviceLinkFiles(await res.arrayBuffer(), device.deviceName || device.id);
+          if (extracted.found.length) {
+            extracted.found.forEach(f => { f.source = device.deviceName || f.source; });
+            gathered.push(...extracted.found);
+            const paste = $('deviceLinkPaste');
+            if (paste && gathered[0]) paste.value = decodeDeviceLinkBytes(gathered[0].data).replace(/^\uFEFF/, '');
+            renderDeviceLinkResults(gathered, 'Import each file on its own. Intune accepts one device per CSV.');
+            deviceLinkLog(`<span>${label} — DeviceLink CSV extracted above.</span>`);
+          } else {
+            deviceLinkLog(`<span>${label} — ${esc(deviceLinkMissNote(extracted, device.deviceName || 'package'))}</span>`);
+          }
+        } catch (fetchErr) {
+          if (fetchErr && fetchErr.name === 'AbortError') throw fetchErr;
+          deviceLinkLog(`<span>${label} — package is ready. The browser cannot read the download directly, so save the zip and drop it in the box above. <a href="${esc(url)}" target="_blank" rel="noopener noreferrer">Download diagnostics zip</a></span>`);
+        }
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+        deviceLinkLog(`<span style="color:#a4262c;">${label} — ${esc(err.message || err)}</span>`);
+      }
+    }
+  } catch (err) {
+    if (!(err && err.name === 'AbortError')) deviceLinkLog(`<span style="color:#a4262c;">${esc(err.message || err)}</span>`);
+    else deviceLinkLog(`<span style="color:var(--muted);">Cancelled.</span>`);
+  } finally {
+    if (cancel) cancel.style.display = 'none';
+  }
+}
+
+$('btnAutopilotDeviceLink').addEventListener('click', openDeviceLinkModal);
+
+// ============================================================
+// Management health sub-tab — Intune management capability, derived
+// from the MDM device-cert lifecycle. An expired management cert means
+// IME can't authenticate: Win32 apps and remediation scripts silently
+// stop while the device still looks compliant and checks in (verified
+// 6/6 on tenant devices, Jun 2026 — RenewStatus=3 / 0x80180018).
+// Read-only — uses the existing DeviceManagementManagedDevices.Read.All
+// scope. No cross-Entra correlation in v1 (Intune's own UPN field is
+// authoritative for the dashboard's purposes).
+// ============================================================
+let certhealthLoaded = false;
+let certhealthRows = [];
+let certhealthSortKey = 'daysRemaining';
+let certhealthSortDir = 'asc';
+const chSelected = new Set(); // device IDs ticked for bulk delete
+
+const CERT_EXPIRING_DAYS = 30;
+const CERT_STALE_SYNC_DAYS = 14;
+const CERT_RECENT_SYNC_DAYS = 7; // expired cert + sync this recent = the silent-failure signature
+
+const CH_STATE_RANK = { broken: 0, atrisk: 1, stale: 2, healthy: 3 };
+const CH_RISK_RANK  = { high: 0, medium: 1, low: 2, none: 3 };
+
+function certhealthStateOf(r) {
+  if (r.daysRemaining !== null && r.daysRemaining < 0) return 'broken';
+  if (r.daysRemaining !== null && r.daysRemaining <= CERT_EXPIRING_DAYS) return 'atrisk';
+  if (r.daysSinceSync !== null && r.daysSinceSync >= CERT_STALE_SYNC_DAYS) return 'stale';
+  return 'healthy';
+}
+
+// Operational risk. High = expired cert AND recent sync: the device still
+// checks in and looks healthy in the portal while IME can't authenticate —
+// the most dangerous state because admins assume it's fine.
+function certhealthRiskOf(r) {
+  const s = certhealthStateOf(r);
+  if (s === 'broken') return (r.daysSinceSync !== null && r.daysSinceSync <= CERT_RECENT_SYNC_DAYS) ? 'high' : 'medium';
+  if (s === 'atrisk') return 'medium';
+  if (s === 'stale') return 'low';
+  return 'none';
+}
+
+function certhealthStateBadge(state, deviceId) {
+  const map = {
+    'broken':  { label: '🔴 Failure likely', bg: '#fdecec', border: '#f5b5b5', color: '#8a2020' },
+    'atrisk':  { label: '🟠 At risk', bg: '#fff1e6', border: '#f0c090', color: '#7a3e00' },
+    'stale':   { label: '🟡 Stale', bg: '#fff8e6', border: '#f0d090', color: '#704500' },
+    'healthy': { label: '🟢 Healthy', bg: '#e7f6ec', border: '#a7d7b5', color: '#1f5d33' }
+  };
+  const m = map[state] || map['healthy'];
+  const click = deviceId ? ` data-ch-why="${esc(deviceId)}" title="Why? Click for the management assessment"` : '';
+  return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:${m.bg}; border:1px solid ${m.border}; color:${m.color};${deviceId ? ' cursor:pointer;' : ''}"${click}>${m.label}</span>`;
+}
+
+function certhealthRiskBadge(risk) {
+  const map = {
+    'high':   { label: 'High', bg: '#fdecec', border: '#f5b5b5', color: '#8a2020' },
+    'medium': { label: 'Medium', bg: '#fff1e6', border: '#f0c090', color: '#7a3e00' },
+    'low':    { label: 'Low', bg: '#fff8e6', border: '#f0d090', color: '#704500' }
+  };
+  const m = map[risk];
+  if (!m) return '<span style="color:var(--muted);">—</span>';
+  return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:${m.bg}; border:1px solid ${m.border}; color:${m.color};">${m.label}</span>`;
+}
+
+// Per-device Health Assessment panel — turns the tab into a
+// troubleshooting assistant instead of a bare cert report. Every
+// statement here is an inference from Graph data + observed tenant
+// patterns, so the wording stays "likely", never absolute.
+function certhealthAssessment(r) {
+  const state = certhealthStateOf(r);
+  const risk = certhealthRiskOf(r);
+  const syncTxt = r.daysSinceSync === null ? 'has never synced'
+    : r.daysSinceSync === 0 ? 'synced today'
+    : `last synced ${r.daysSinceSync} day${r.daysSinceSync === 1 ? '' : 's'} ago`;
+  const a = { verdict: '', confidence: '', confidenceWhy: [], evidence: [], symptoms: [], validate: [], remediate: [] };
+
+  if (state === 'broken') {
+    const overdue = -r.daysRemaining;
+    const silent = risk === 'high';
+    a.verdict = 'Management failure likely' + (silent
+      ? ' — the device still checks in and appears healthy in the Intune portal, but IME probably can no longer authenticate.'
+      : ' — the certificate is expired; the device is also not checking in, so it may simply be offline or retired.');
+    a.confidence = silent ? 'High' : 'Medium';
+    a.confidenceWhy = [
+      '<code>managementCertificateExpirationDate</code> from Microsoft Graph shows the certificate is expired',
+      silent ? 'Recent device sync — the device is alive and talking to Intune' : 'No recent sync — the failure mode can\'t be distinguished from a decommissioned device',
+      'Operational patterns observed across the tenant: this signature matched 6/6 investigated devices (3 broken, 3 healthy controls)'
+    ];
+    a.evidence = [
+      `Management certificate expired ${overdue} day${overdue === 1 ? '' : 's'} ago`,
+      `Device ${syncTxt}`,
+      'Based on observed tenant patterns, this strongly correlates with IME management failure (ClientCertCheck: 0 MDM certs; registry RenewStatus = 3, RenewErrorCode = 0x80180018)'
+    ];
+    a.symptoms = [
+      'Win32 apps remain pending and never install',
+      'Remediation scripts may not execute',
+      'Proactive Remediations may fail',
+      'IME workloads may stop processing (hourly auth retries in the log)'
+    ];
+    a.validate = [
+      'Review <code>ClientCertCheck.log</code> — look for "MDM certs found in LocalMachine count: 0"',
+      'Review <code>IntuneManagementExtension.log</code> — look for "Found 0 MDM certificates"',
+      'Verify the Microsoft Intune MDM Device CA certificate exists in <code>LocalMachine\\My</code> (certlm.msc → Personal)',
+      'Check <code>HKLM\\SOFTWARE\\Microsoft\\Enrollments\\…</code> — RenewStatus = 3 with RenewErrorCode = 0x80180018 confirms failed renewal'
+    ];
+    a.remediate = [
+      'Trigger MDM certificate renewal — force a sync / check-in so ROBO renewal can attempt to run',
+      'Re-enroll the device if renewal fails (RenewStatus = 3 typically does not self-recover)',
+      'Verify device enrollment status after remediation'
+    ];
+  } else if (state === 'atrisk') {
+    a.verdict = `Management at risk — the certificate expires in ${r.daysRemaining} day${r.daysRemaining === 1 ? '' : 's'}. Intune renews automatically at check-in, but if renewal fails (as observed in this tenant) management breaks silently at expiry.`;
+    a.confidence = 'N/A';
+    a.confidenceWhy = ['Nothing is broken yet — this is a renewal watch-list derived from <code>managementCertificateExpirationDate</code>.'];
+    a.evidence = [`Certificate expires in ${r.daysRemaining} day${r.daysRemaining === 1 ? '' : 's'}`, `Device ${syncTxt}`];
+    a.symptoms = ['None expected yet — Win32 apps and scripts should still work'];
+    a.validate = ['Confirm the device keeps syncing so auto-renewal can occur'];
+    a.remediate = ['Re-check after the expiry date: if the device moves to Management failure likely, follow that runbook'];
+  } else if (state === 'stale') {
+    a.verdict = `Unverifiable — the device ${syncTxt} (threshold ≥ ${CERT_STALE_SYNC_DAYS} days). Certificate state can't be assessed for a device that isn't checking in.`;
+    a.confidence = 'Low';
+    a.confidenceWhy = ['No recent telemetry to classify against — the device may be off, offline, or abandoned.'];
+    a.evidence = [`Device ${syncTxt}`];
+    a.symptoms = ['All Intune management is inert until the device checks in'];
+    a.validate = ['Confirm the device is still in use', 'If in use: check connectivity and MDM enrollment on the device'];
+    a.remediate = ['If retired: clean the device up from Intune'];
+  } else if (r.daysRemaining === null) {
+    a.verdict = `No certificate signal — Graph reports no management-certificate data for this device (typical for co-managed or non-MDM-enrolled devices). The device ${syncTxt}.`;
+    a.confidence = 'N/A';
+    a.confidenceWhy = ['Certificate lifecycle is not tracked for this enrollment type.'];
+  } else {
+    a.verdict = `Healthy — the management certificate is valid for ${r.daysRemaining} more day${r.daysRemaining === 1 ? '' : 's'} and the device ${syncTxt}. IME authentication, Win32 apps, scripts and remediations should all be functioning.`;
+    a.confidence = 'High';
+    a.confidenceWhy = [
+      'Valid <code>managementCertificateExpirationDate</code> from Microsoft Graph',
+      'Recent device sync',
+      'Operational patterns observed across the tenant: valid cert + recent sync matched 3/3 healthy control devices'
+    ];
+  }
+  return a;
+}
+
+function openChAssessModal(deviceId) {
+  const r = certhealthRows.find(x => x.id === deviceId);
+  if (!r) return;
+  const state = certhealthStateOf(r);
+  const a = certhealthAssessment(r);
+  const list = items => `<ul style="margin:4px 0 0; padding-left:18px;">${items.map(s => `<li>${s}</li>`).join('')}</ul>`;
+  const section = (title, body) => `<div style="margin-top:14px;"><div style="font-weight:600; font-size:13px; margin-bottom:2px;">${title}</div>${body}</div>`;
+  $('chAssessTitle').textContent = `Health assessment — ${r.deviceName || 'device'}`;
+  $('chAssessSub').textContent = r.userPrincipalName || '';
+  $('chAssessBody').innerHTML = `
+    <div style="font-size:13px; line-height:1.6;">
+      <div><strong>Assessment</strong> &nbsp;${certhealthStateBadge(state)}&nbsp; ${certhealthRiskBadge(certhealthRiskOf(r))}</div>
+      <div style="margin-top:4px;">${a.verdict}</div>
+      ${section('Confidence: ' + a.confidence, list(a.confidenceWhy))}
+      ${a.evidence.length ? section('Evidence', list(a.evidence)) : ''}
+      ${a.symptoms.length ? section('Likely symptoms', list(a.symptoms)) : ''}
+      ${a.validate.length ? section('Recommended validation', list(a.validate)) : ''}
+      ${a.remediate.length ? section('Recommended remediation', list(a.remediate)) : ''}
+      ${r.id ? `<div style="margin-top:16px;"><span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" data-ime-checkin="${esc(r.id)}" data-ime-name="${esc(r.deviceName || '')}" title="Force an IME required-app check-in on this device (on-demand) — a sync also lets certificate auto-renewal attempt to run">⚡ Force check-in / sync now</span></div>` : ''}
+    </div>`;
+  $('chAssessModal').classList.add('show');
+}
+
+function closeChAssessModal() {
+  $('chAssessModal').classList.remove('show');
+}
+$('chAssessModal').addEventListener('click', e => { if (e.target === $('chAssessModal')) closeChAssessModal(); });
+
+async function loadCerthealth(force = false) {
+  if (certhealthLoaded && !force) return;
+  $('certhealthLoading').style.display = '';
+  $('certhealthContent').style.display = 'none';
+  $('certhealthError').innerHTML = '';
+  try {
+    const select = 'id,deviceName,userPrincipalName,operatingSystem,osVersion,managementCertificateExpirationDate,lastSyncDateTime,model,manufacturer';
+    const filter = `operatingSystem eq 'Windows'`;
+    const devices = await graphGetAll(`beta/deviceManagement/managedDevices?$select=${select}&$filter=${encodeURIComponent(filter)}`);
+    const now = Date.now();
+    chSelected.clear();
+    certhealthRows = devices.map(d => {
+      // Graph returns "0001-01-01T00:00:00Z" for devices with no management certificate
+      // (co-managed, intermediate enrollment, non-MDM). Treat sub-1900 as "no cert data".
+      const rawExp = d.managementCertificateExpirationDate;
+      const expDate = rawExp ? new Date(rawExp) : null;
+      const hasCert = !!(expDate && expDate.getUTCFullYear() > 1900);
+      const expMs = hasCert ? expDate.getTime() : null;
+      const syncMs = d.lastSyncDateTime ? new Date(d.lastSyncDateTime).getTime() : null;
+      const daysRemaining = expMs !== null ? Math.floor((expMs - now) / (1000 * 60 * 60 * 24)) : null;
+      const daysSinceSync = syncMs ? Math.floor((now - syncMs) / (1000 * 60 * 60 * 24)) : null;
+      return {
+        id: d.id,
+        deviceName: d.deviceName || '',
+        userPrincipalName: d.userPrincipalName || '',
+        osVersion: d.osVersion || '',
+        model: d.model || '',
+        manufacturer: d.manufacturer || '',
+        managementCertificateExpirationDate: hasCert ? rawExp : '',
+        lastSyncDateTime: d.lastSyncDateTime || '',
+        daysRemaining,
+        daysSinceSync
+      };
+    });
+    certhealthLoaded = true;
+    $('certhealthLoading').style.display = 'none';
+    $('certhealthContent').style.display = '';
+    renderCerthealthTiles();
+    renderCerthealthTable();
+  } catch (e) {
+    console.error('Management health load failed', e);
+    $('certhealthLoading').style.display = 'none';
+    $('certhealthError').innerHTML = `<div class="error-banner">Failed to load management health: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+function renderCerthealthTiles() {
+  let total = 0, atrisk = 0, broken = 0, stale = 0;
+  for (const r of certhealthRows) {
+    total++;
+    const s = certhealthStateOf(r);
+    if (s === 'atrisk') atrisk++;
+    else if (s === 'broken') broken++;
+    else if (s === 'stale') stale++;
+  }
+  $('chTileTotal').textContent = total;
+  $('chTileExpiring').textContent = atrisk;
+  $('chTileExpired').textContent = broken;
+  $('chTileStale').textContent = stale;
+  // certhealthStateOf returns one tier per device, so the three counts
+  // are mutually exclusive — subtracting their sum gives "no flag".
+  const healthy = total - atrisk - broken - stale;
+  const rate = total === 0 ? null : (healthy / total) * 100;
+  setGaugeKpi('chHealthRing', 'chHealthRate', rate, { thresholds: { good: 95, watch: 85 } });
+}
+
+function applyCerthealthFilters(rows) {
+  const q = ($('certhealthFilter').value || '').toLowerCase().trim();
+  const state = $('certhealthStateFilter').value;
+  return rows.filter(r => {
+    if (state && certhealthStateOf(r) !== state) return false;
+    if (q) {
+      const hay = [r.deviceName, r.userPrincipalName, r.model, r.manufacturer].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+const chTileMap = {
+  chTileTotal: '',
+  chTileExpiring: 'atrisk',
+  chTileExpired: 'broken',
+  chTileStale: 'stale'
+};
+
+function syncCerthealthTileUi() {
+  const current = $('certhealthStateFilter').value;
+  Object.keys(chTileMap).forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    const tile = el.closest('.tile');
+    if (!tile) return;
+    const target = chTileMap[id];
+    // Don't highlight the "Windows devices" total tile — its target '' is the default state
+    tile.classList.toggle('active', target !== '' && current === target);
+  });
+}
+
+function renderCerthealthTable() {
+  // Clear KPI affordance per the convention
+  const stateActive = !!$('certhealthStateFilter').value;
+  const searchActive = !!($('certhealthFilter').value || '').trim();
+  $('btnCerthealthClearKpi').style.display = (stateActive || searchActive) ? '' : 'none';
+  syncCerthealthTileUi();
+
+  let rows = applyCerthealthFilters(certhealthRows);
+  const dir = certhealthSortDir === 'asc' ? 1 : -1;
+  rows.sort((a, b) => {
+    let av, bv;
+    if (certhealthSortKey === 'state') { av = CH_STATE_RANK[certhealthStateOf(a)]; bv = CH_STATE_RANK[certhealthStateOf(b)]; }
+    else if (certhealthSortKey === 'risk') { av = CH_RISK_RANK[certhealthRiskOf(a)]; bv = CH_RISK_RANK[certhealthRiskOf(b)]; }
+    else { av = a[certhealthSortKey]; bv = b[certhealthSortKey]; if (av == null) av = dir > 0 ? Infinity : -Infinity; if (bv == null) bv = dir > 0 ? Infinity : -Infinity; if (typeof av === 'string') { av = av.toLowerCase(); bv = (bv || '').toString().toLowerCase(); } }
+    if (av < bv) return -dir;
+    if (av > bv) return dir;
+    return (a.deviceName || '').toLowerCase().localeCompare((b.deviceName || '').toLowerCase());
+  });
+
+  const body = $('certhealthRowsBody');
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="10" style="text-align:center; color:var(--muted); padding:24px;">No devices match the current filters.</td></tr>`;
+  } else {
+    body.innerHTML = rows.map(r => {
+      const state = certhealthStateOf(r);
+      const deviceCell = r.id
+        ? `<a href="${intuneDeviceUrl(r.id, 'overview')}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.deviceName) || '—'}</a>`
+        : (esc(r.deviceName) || '—');
+      return `
+        <tr>
+          <td>${r.id ? `<input type="checkbox" data-ch-select="${esc(r.id)}" ${chSelected.has(r.id) ? 'checked' : ''} style="cursor:pointer;">` : ''}</td>
+          <td>${deviceCell}</td>
+          <td>${esc(r.userPrincipalName) || '—'}</td>
+          <td>${esc(r.osVersion) || '—'}</td>
+          <td>${r.daysRemaining == null ? '—' : (r.daysRemaining < 0 ? `<span style="color:#8a2020; font-weight:600;">${r.daysRemaining}</span>` : r.daysRemaining)}</td>
+          <td class="date">${r.managementCertificateExpirationDate ? new Date(r.managementCertificateExpirationDate).toLocaleString() : '—'}</td>
+          <td>${r.daysSinceSync == null ? '—' : r.daysSinceSync}</td>
+          <td>${certhealthRiskBadge(certhealthRiskOf(r))}</td>
+          <td>${certhealthStateBadge(state, r.id)}</td>
+          <td style="white-space:nowrap;">${r.id ? `<span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:12px;" data-ch-why="${esc(r.id)}" title="Open the Health Assessment panel: classification, evidence, symptoms, validation and remediation steps">🔍 Investigate</span>` : '—'}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+  $('certhealthCount').textContent = rows.length;
+
+  // Selection UI: select-all reflects the filtered view; the delete button
+  // counts every selected device, filtered or not.
+  const visibleIds = rows.map(r => r.id).filter(Boolean);
+  const selVisible = visibleIds.filter(id => chSelected.has(id));
+  const sa = $('chSelectAll');
+  sa.checked = visibleIds.length > 0 && selVisible.length === visibleIds.length;
+  sa.indeterminate = selVisible.length > 0 && selVisible.length < visibleIds.length;
+  const totalSel = certhealthRows.filter(r => chSelected.has(r.id)).length;
+  const delBtn = $('btnCerthealthDelete');
+  delBtn.style.display = totalSel ? '' : 'none';
+  delBtn.textContent = `🗑 Delete selected (${totalSel})`;
+  const wipeBtn = $('btnCerthealthWipe');
+  wipeBtn.style.display = totalSel ? '' : 'none';
+  wipeBtn.textContent = `⚠ Wipe selected (${totalSel})`;
+}
+
+function buildMaaDeviceEmailHtml({ action, devices, account, upn, customer, maaJust }) {
+  const count = devices.length;
+  const deviceRows = devices.map(r =>
+    `${esc(r.deviceName || r.id)} <span style="color:#999; font-size:11px; font-family:ui-monospace,Consolas,monospace;">${esc(r.id)}</span>`
+  ).join('<br>');
+  return buildMaaEmailHtml({
+    tenantLine: 'Microsoft Intune · Multi Admin Approval' + (customer ? ' · ' + customer.code : ''),
+    heading: `${account?.name || upn} requested approval for a device ${action}`,
+    intro: `An Intune admin has submitted a <strong>remote ${esc(action)}</strong> for <strong>${count === 1 ? '1 device' : `${count} devices`}</strong>. Multi-admin approval is required — a second admin must approve before the ${esc(action)} executes.`,
+    button: { text: 'Review request', url: MAA_BLADE_URL },
+    rows: [
+      ['Requester', `${esc(account?.name || upn)}<br><span style="color:#888; font-size:12px;">${esc(upn)}</span>`],
+      ['Customer', customer ? esc(customer.code) : '—'],
+      [count === 1 ? 'Device' : 'Devices', deviceRows],
+      ['Submitted', esc(new Date().toUTCString())],
+      ['Justification', maaJust ? `<span style="white-space:pre-wrap;">${esc(maaJust)}</span>` : ''],
+    ],
+    footer: `Sent automatically by THE Intune Dashboard at the moment the ${esc(action)} was submitted. Find the pending request under Tenant administration → Multi Admin Approval → Received requests.`
+  });
+}
+
+// Bulk-delete the selected devices from Intune. DELETE managedDevices/{id}
+// removes the record; an enrolled device is retired on its next check-in.
+// MAA tenants: prompt for one justification and reuse it for the whole batch;
+// 412/409 means the delete was queued for an approver, not executed.
+async function deleteSelectedCerthealthDevices() {
+  const targets = certhealthRows.filter(r => chSelected.has(r.id));
+  if (!targets.length) return;
+  const names = targets.map(r => r.deviceName || r.id);
+  const preview = names.slice(0, 10).map(n => '  • ' + n).join('\n');
+  const more = names.length > 10 ? `\n  …and ${names.length - 10} more` : '';
+  if (!confirm(`Delete ${names.length} device${names.length === 1 ? '' : 's'} from Intune?\n\n${preview}${more}\n\nThis removes the Intune record; each device is retired on its next check-in (company data and profiles removed where applicable). This cannot be undone from the dashboard.`)) return;
+
+  const btn = $('btnCerthealthDelete');
+  btn.style.pointerEvents = 'none';
+  let token;
+  try {
+    token = await ensureScopeToken('DeviceManagementManagedDevices.ReadWrite.All');
+  } catch (e) {
+    $('certhealthError').innerHTML = `<div class="error-banner">Consent for device deletion was not granted: ${esc(e.message || String(e))}</div>`;
+    btn.style.pointerEvents = '';
+    renderCerthealthTable();
+    return;
+  }
+
+  let maaJustB64 = null;
+  let maaJust = null;
+  let cancelled = false;
+  const deleted = [], queued = [], failed = [];
+  for (let i = 0; i < targets.length; i++) {
+    const r = targets[i];
+    btn.textContent = `🗑 Deleting ${i + 1}/${targets.length}…`;
+    const attempt = (headers = {}) => graphDelete('beta/deviceManagement/managedDevices/' + encodeURIComponent(r.id), { token, headers });
+    try {
+      await attempt(maaJustB64 ? { 'x-msft-approval-justification': maaJustB64 } : {});
+      deleted.push(r);
+    } catch (e) {
+      if (e.isMaa && !maaJustB64) {
+        const just = prompt(`Multi-Admin Approval is required in this tenant. Enter one justification for deleting ${targets.length === 1 ? `"${r.deviceName}"` : `these ${targets.length} devices`} (recorded in the audit log; ≤ 1024 chars):`);
+        if (!just) { cancelled = true; break; }
+        maaJust = just;
+        maaJustB64 = btoa(String.fromCharCode(...new TextEncoder().encode(just)));
+        try {
+          await attempt({ 'x-msft-approval-justification': maaJustB64 });
+          deleted.push(r);
+        } catch (e2) {
+          if (e2.status === 412 || e2.status === 409) queued.push(r);
+          else failed.push({ r, error: e2.message || String(e2) });
+        }
+      } else if (e.status === 412 || e.status === 409) {
+        queued.push(r);
+      } else {
+        failed.push({ r, error: e.message || String(e) });
+      }
+    }
+  }
+
+  // Deleted rows leave the table; queued ones stay (the record still exists
+  // until an approver acts) but drop out of the selection.
+  const deletedIds = new Set(deleted.map(r => r.id));
+  if (deletedIds.size) certhealthRows = certhealthRows.filter(r => !deletedIds.has(r.id));
+  deleted.forEach(r => chSelected.delete(r.id));
+  queued.forEach(r => chSelected.delete(r.id));
+
+  const skipped = targets.length - deleted.length - queued.length - failed.length;
+  const parts = [];
+  if (deleted.length) parts.push(`✓ Deleted ${deleted.length}: ${deleted.map(r => r.deviceName || r.id).join(', ')}`);
+  if (queued.length) parts.push(`⏳ ${queued.length} submitted for Multi-Admin Approval — approve under Tenant administration → Multi Admin Approval: ${queued.map(r => r.deviceName || r.id).join(', ')}`);
+  if (failed.length) parts.push(`✗ ${failed.length} failed: ${failed.map(f => `${f.r.deviceName || f.r.id} (${f.error})`).join('; ')}`);
+  if (skipped > 0) parts.push(`${cancelled ? 'Justification cancelled — ' : ''}${skipped} device${skipped === 1 ? '' : 's'} not attempted.`);
+  const cls = (failed.length || cancelled) ? 'error-banner' : 'notice-banner';
+  $('certhealthError').innerHTML = parts.length ? `<div class="${cls}">${parts.map(p => esc(p)).join('<br>')}</div>` : '';
+
+  // Send MAA approver notification for queued device deletes (same pattern as
+  // the app-catalog delete flow). Non-blocking — mail failure must not affect
+  // the result banner already shown above.
+  if (queued.length) {
+    try {
+      const account = msalApp && msalApp.getActiveAccount();
+      const upn = (account?.username || '').toLowerCase();
+      const allCustomers = loadCustomers();
+      const customer = allCustomers.find(c => (c.email || '').toLowerCase() === upn) || null;
+      const approvers = (customer && customer.approvers) || [];
+      if (approvers.length) {
+        const mailToken = await ensureScopeToken('Mail.Send');
+        const mailHtml = buildMaaDeviceEmailHtml({ action: 'delete', devices: queued, account, upn, customer, maaJust });
+        const mailMsg = { message: {
+          subject: `[Intune MAA] Device delete needs approval: ${queued.length === 1 ? (queued[0].deviceName || queued[0].id) : `${queued.length} devices`}`,
+          body: { contentType: 'HTML', content: mailHtml },
+          toRecipients: approvers.map(a => ({ emailAddress: { address: a } }))
+        }, saveToSentItems: true };
+        const mailRes = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + mailToken, 'Content-Type': 'application/json' },
+          body: JSON.stringify(mailMsg)
+        });
+        const mailResult = mailRes.ok ? 'sent' : 'failed';
+        const mailErr = mailRes.ok ? undefined : await mailRes.text();
+        logMailAttempt({ kind: 'device-maa', customer: customer?.code, approvers, result: mailResult, ...(mailErr ? { error: mailErr } : {}) });
+      }
+    } catch (_) { /* non-blocking */ }
+  }
+
+  btn.style.pointerEvents = '';
+  renderCerthealthTiles();
+  renderCerthealthTable();
+}
+
+// Remote wipe the selected devices. POST managedDevices/{id}/wipe triggers a
+// factory reset; the device record stays in Intune (unlike delete/retire).
+// MAA tenants: same prompt→retry→queue pattern as deleteSelectedCerthealthDevices.
+async function wipeSelectedCerthealthDevices() {
+  const targets = certhealthRows.filter(r => chSelected.has(r.id));
+  if (!targets.length) return;
+  const names = targets.map(r => r.deviceName || r.id);
+  const preview = names.slice(0, 10).map(n => '  • ' + n).join('\n');
+  const more = names.length > 10 ? `\n  …and ${names.length - 10} more` : '';
+  if (!confirm(`Remote wipe ${names.length} device${names.length === 1 ? '' : 's'}?\n\n${preview}${more}\n\nThis factory-resets the device OS. The device remains enrolled in Intune. This cannot be undone.`)) return;
+
+  const btn = $('btnCerthealthWipe');
+  btn.style.pointerEvents = 'none';
+  let token;
+  try {
+    token = await ensureScopeToken('DeviceManagementManagedDevices.ReadWrite.All');
+  } catch (e) {
+    $('certhealthError').innerHTML = `<div class="error-banner">Consent for wipe was not granted: ${esc(e.message || String(e))}</div>`;
+    btn.style.pointerEvents = '';
+    renderCerthealthTable();
+    return;
+  }
+
+  let maaJustB64 = null;
+  let maaJust = null;
+  let cancelled = false;
+  const succeeded = [], queued = [], failed = [];
+  for (let i = 0; i < targets.length; i++) {
+    const r = targets[i];
+    btn.textContent = `⚠ Wiping ${i + 1}/${targets.length}…`;
+    const attempt = (extraHeaders = {}) => graphPost(
+      'beta/deviceManagement/managedDevices/' + encodeURIComponent(r.id) + '/wipe',
+      { keepEnrollmentData: false, keepUserData: false },
+      { token, headers: extraHeaders }
+    );
+    try {
+      await attempt(maaJustB64 ? { 'x-msft-approval-justification': maaJustB64 } : {});
+      succeeded.push(r);
+    } catch (e) {
+      if (e.isMaa && !maaJustB64) {
+        const just = prompt(`Multi-Admin Approval is required. Enter justification for wiping ${targets.length === 1 ? `"${r.deviceName}"` : `these ${targets.length} devices`} (recorded in the audit log; ≤ 1024 chars):`);
+        if (!just) { cancelled = true; break; }
+        maaJust = just;
+        maaJustB64 = btoa(String.fromCharCode(...new TextEncoder().encode(just)));
+        try {
+          await attempt({ 'x-msft-approval-justification': maaJustB64 });
+          succeeded.push(r);
+        } catch (e2) {
+          // wipe endpoint returns 400+isMaa on first attempt AND (unlike delete)
+          // may still return 400+isMaa on the retry — treat any isMaa response
+          // after justification is provided as "queued for approval".
+          if (e2.status === 412 || e2.status === 409 || e2.isMaa) queued.push(r);
+          else failed.push({ r, error: e2.message || String(e2) });
+        }
+      } else if (e.status === 412 || e.status === 409 || (e.isMaa && maaJustB64)) {
+        // isMaa+justification-already-set: wipe was accepted by MAA but the
+        // endpoint kept returning 400 rather than promoting to 412.
+        queued.push(r);
+      } else {
+        failed.push({ r, error: e.message || String(e) });
+      }
+    }
+  }
+
+  const skipped = targets.length - succeeded.length - queued.length - failed.length;
+  const parts = [];
+  if (succeeded.length) parts.push(`✓ Wipe issued to ${succeeded.length}: ${succeeded.map(r => r.deviceName || r.id).join(', ')}`);
+  if (queued.length) parts.push(`⏳ ${queued.length} submitted for Multi-Admin Approval — approve under Tenant administration → Multi Admin Approval: ${queued.map(r => r.deviceName || r.id).join(', ')}`);
+  if (failed.length) parts.push(`✗ ${failed.length} failed: ${failed.map(f => `${f.r.deviceName || f.r.id} (${f.error})`).join('; ')}`);
+  if (skipped > 0) parts.push(`${cancelled ? 'Justification cancelled — ' : ''}${skipped} device${skipped === 1 ? '' : 's'} not attempted.`);
+  const cls = (failed.length || cancelled) ? 'error-banner' : 'notice-banner';
+  $('certhealthError').innerHTML = parts.length ? `<div class="${cls}">${parts.map(p => esc(p)).join('<br>')}</div>` : '';
+
+  if (queued.length) {
+    try {
+      const account = msalApp && msalApp.getActiveAccount();
+      const upn = (account?.username || '').toLowerCase();
+      const allCustomers = loadCustomers();
+      const customer = allCustomers.find(c => (c.email || '').toLowerCase() === upn) || null;
+      const approvers = (customer && customer.approvers) || [];
+      if (approvers.length) {
+        const mailToken = await ensureScopeToken('Mail.Send');
+        const mailHtml = buildMaaDeviceEmailHtml({ action: 'wipe', devices: queued, account, upn, customer, maaJust });
+        const mailMsg = { message: {
+          subject: `[Intune MAA] Device wipe needs approval: ${queued.length === 1 ? (queued[0].deviceName || queued[0].id) : `${queued.length} devices`}`,
+          body: { contentType: 'HTML', content: mailHtml },
+          toRecipients: approvers.map(a => ({ emailAddress: { address: a } }))
+        }, saveToSentItems: true };
+        const mailRes = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + mailToken, 'Content-Type': 'application/json' },
+          body: JSON.stringify(mailMsg)
+        });
+        logMailAttempt({ kind: 'device-wipe-maa', customer: customer?.code, approvers, result: mailRes.ok ? 'sent' : 'failed' });
+      }
+    } catch (_) { /* non-blocking */ }
+  }
+
+  btn.style.pointerEvents = '';
+  renderCerthealthTable();
+}
+
+function exportCerthealthCsv() {
+  const rows = applyCerthealthFilters(certhealthRows);
+  const header = ['DeviceName','User','OSVersion','Manufacturer','Model','CertExpiration','DaysRemaining','LastSync','DaysSinceSync','Health','Risk'];
+  const lines = [header.join(',')].concat(rows.map(r => [
+    r.deviceName, r.userPrincipalName, r.osVersion, r.manufacturer, r.model,
+    r.managementCertificateExpirationDate, r.daysRemaining, r.lastSyncDateTime, r.daysSinceSync, certhealthStateOf(r), certhealthRiskOf(r)
+  ].map(escCsv).join(',')));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `management-health-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Clickable health badge / 🔍 Investigate → open the Health Assessment panel
+$('certhealthRowsBody').addEventListener('click', e => {
+  const el = e.target.closest('[data-ch-why]');
+  if (el) openChAssessModal(el.dataset.chWhy);
+});
+
+// Row checkboxes + select-all (select-all operates on the filtered view)
+$('certhealthRowsBody').addEventListener('change', e => {
+  const cb = e.target.closest('[data-ch-select]');
+  if (!cb) return;
+  if (cb.checked) chSelected.add(cb.dataset.chSelect);
+  else chSelected.delete(cb.dataset.chSelect);
+  renderCerthealthTable();
+});
+$('chSelectAll').addEventListener('change', () => {
+  const all = $('chSelectAll').checked;
+  applyCerthealthFilters(certhealthRows).forEach(r => {
+    if (!r.id) return;
+    if (all) chSelected.add(r.id); else chSelected.delete(r.id);
+  });
+  renderCerthealthTable();
+});
+$('btnCerthealthDelete').addEventListener('click', deleteSelectedCerthealthDevices);
+$('btnCerthealthWipe').addEventListener('click', wipeSelectedCerthealthDevices);
+
+$('certhealthFilter').addEventListener('input', renderCerthealthTable);
+$('certhealthStateFilter').addEventListener('change', renderCerthealthTable);
+$('btnCerthealthRefresh').addEventListener('click', () => loadCerthealth(true));
+$('btnCerthealthExport').addEventListener('click', exportCerthealthCsv);
+$('btnCerthealthClearKpi').addEventListener('click', () => {
+  $('certhealthStateFilter').value = '';
+  $('certhealthFilter').value = '';
+  $('certhealthFilter').dispatchEvent(new Event('input', { bubbles: true }));
+  renderCerthealthTable();
+});
+
+document.querySelectorAll('[data-ch-tile]').forEach(tile => {
+  tile.addEventListener('click', () => {
+    const target = tile.dataset.chTile;
+    const current = $('certhealthStateFilter').value;
+    // Toggle off if clicking the already-active tile; total tile ('') always goes to ''
+    $('certhealthStateFilter').value = (target !== '' && current === target) ? '' : target;
+    renderCerthealthTable();
+  });
+});
+
+document.querySelectorAll('#intuneSubCerthealth th[data-csort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.csort;
+    if (certhealthSortKey === key) certhealthSortDir = certhealthSortDir === 'asc' ? 'desc' : 'asc';
+    else { certhealthSortKey = key; certhealthSortDir = 'asc'; }
+    renderCerthealthTable();
+  });
+});
+
+// ============================================================
+// Assignments Explorer sub-tab
+// Group-centric: search an Entra group → see every policy with an
+// assignment targeting that group, across 4 types (apps, configs,
+// compliance, remediation scripts).
+// Requires: Group.Read.All (already requested).
+// ============================================================
+let assignmentsPoliciesLoaded = false;
+let assignmentsPoliciesLoading = false;
+let assignmentsAbort = null;
+let assignmentsLoadGen = 0;
+let assignmentsRaw = { apps: [], configs: [], compliance: [], healthScripts: [], settingsCatalog: [], psScripts: [], updateProfiles: [] };
+let assignmentsSelectedGroup = null;
+let assignmentsSearchTimer = null;
+
+const GROUP_TARGET_TYPE = '#microsoft.graph.groupAssignmentTarget';
+const EXCLUSION_TARGET_TYPE = '#microsoft.graph.exclusionGroupAssignmentTarget';
+
+// Parallel policy index endpoints. Graph can 403/404 per type (e.g. driver
+// update profiles need Autopatch) — one failure must not kill the load.
+const ASSIGNMENTS_ENDPOINTS = [
+  { key: 'apps', label: 'Apps', path: 'beta/deviceAppManagement/mobileApps?$expand=assignments' },
+  { key: 'configs', label: 'Configs', path: 'beta/deviceManagement/deviceConfigurations?$expand=assignments' },
+  { key: 'compliance', label: 'Compliance', path: 'beta/deviceManagement/deviceCompliancePolicies?$expand=assignments' },
+  { key: 'healthScripts', label: 'Remediations', path: 'beta/deviceManagement/deviceHealthScripts?$expand=assignments' },
+  { key: 'settingsCatalog', label: 'Settings catalog', path: 'beta/deviceManagement/configurationPolicies?$expand=assignments' },
+  { key: 'psScripts', label: 'Scripts', path: 'beta/deviceManagement/deviceManagementScripts?$expand=assignments' },
+  { key: 'featureUpdates', label: 'Feature updates', path: 'beta/deviceManagement/windowsFeatureUpdateProfiles?$expand=assignments' },
+  { key: 'qualityUpdates', label: 'Quality updates', path: 'beta/deviceManagement/windowsQualityUpdateProfiles?$expand=assignments' },
+  { key: 'driverUpdates', label: 'Driver updates', path: 'beta/deviceManagement/windowsDriverUpdateProfiles?$expand=assignments' }
+];
+
+function formatAssignmentsProgress(states) {
+  return ASSIGNMENTS_ENDPOINTS.map(ep => {
+    const s = states[ep.key];
+    if (!s || s.status === 'pending') return `${ep.label}…`;
+    if (s.status === 'ok') return `${ep.label} ${s.count}`;
+    if (s.status === 'fail') return `${ep.label} ✕`;
+    return `${ep.label}…`;
+  }).join(' · ');
+}
+
+function cancelAssignmentsLoad() {
+  assignmentsLoadGen++;
+  if (assignmentsAbort) { try { assignmentsAbort.abort(); } catch (_) {} }
+  assignmentsPoliciesLoading = false;
+  $('btnAssignmentsCancel').style.display = 'none';
+  if (!assignmentsPoliciesLoaded) {
+    $('assignmentsLoadStatus').textContent = 'Cancelled. Click Refresh to index policies again.';
+  }
+}
+
+async function loadAssignmentsPolicies(force = false) {
+  if (assignmentsPoliciesLoading && !force) return;
+  if (assignmentsPoliciesLoaded && !force) return;
+
+  if (assignmentsAbort) { try { assignmentsAbort.abort(); } catch (_) {} }
+  assignmentsAbort = new AbortController();
+  const signal = assignmentsAbort.signal;
+  const gen = ++assignmentsLoadGen;
+
+  assignmentsPoliciesLoading = true;
+  $('btnAssignmentsCancel').style.display = '';
+  const states = Object.fromEntries(ASSIGNMENTS_ENDPOINTS.map(ep => [ep.key, { status: 'pending' }]));
+  $('assignmentsLoadStatus').textContent = 'Indexing policies… ' + formatAssignmentsProgress(states);
+
+  const bag = {};
+  try {
+    await Promise.all(ASSIGNMENTS_ENDPOINTS.map(async ep => {
+      try {
+        const rows = await graphGetAll(ep.path, {
+          signal,
+          onPage: (n) => {
+            if (gen !== assignmentsLoadGen || signal.aborted) return;
+            states[ep.key] = { status: 'pending', count: n };
+            $('assignmentsLoadStatus').textContent = 'Indexing policies… ' + formatAssignmentsProgress(states);
+          }
+        });
+        if (gen !== assignmentsLoadGen || signal.aborted) return;
+        bag[ep.key] = rows;
+        states[ep.key] = { status: 'ok', count: rows.length };
+      } catch (e) {
+        if (e && e.name === 'AbortError') throw e;
+        console.warn(`Assignments: ${ep.label} fetch failed:`, e.message || e);
+        bag[ep.key] = [];
+        states[ep.key] = { status: 'fail' };
+      }
+      if (gen === assignmentsLoadGen && !signal.aborted) {
+        $('assignmentsLoadStatus').textContent = 'Indexing policies… ' + formatAssignmentsProgress(states);
+      }
+    }));
+
+    if (gen !== assignmentsLoadGen || signal.aborted) {
+      if (gen === assignmentsLoadGen && !assignmentsPoliciesLoaded) {
+        $('assignmentsLoadStatus').textContent = 'Cancelled. Click Refresh to index policies again.';
+      }
+      return;
+    }
+
+    const updateProfiles = [
+      ...(bag.featureUpdates || []).map(p => ({ ...p, _updateType: 'Feature' })),
+      ...(bag.qualityUpdates || []).map(p => ({ ...p, _updateType: 'Quality' })),
+      ...(bag.driverUpdates || []).map(p => ({ ...p, _updateType: 'Driver' }))
+    ];
+    assignmentsRaw = {
+      apps: bag.apps || [],
+      configs: bag.configs || [],
+      compliance: bag.compliance || [],
+      healthScripts: bag.healthScripts || [],
+      settingsCatalog: bag.settingsCatalog || [],
+      psScripts: bag.psScripts || [],
+      updateProfiles
+    };
+    assignmentsPoliciesLoaded = true;
+    const a = assignmentsRaw;
+    $('assignmentsLoadStatus').textContent =
+      `Indexed ${a.apps.length} apps · ${a.configs.length} configs · ${a.settingsCatalog.length} settings catalog · ${a.compliance.length} compliance · ${a.psScripts.length} scripts · ${a.healthScripts.length} remediations · ${a.updateProfiles.length} update profiles. Type a group name above.`;
+    if (assignmentsSelectedGroup) renderAssignmentsForGroup();
+    computeAssignmentHygiene().catch(e => console.error('Hygiene compute failed', e));
+  } catch (e) {
+    if (e && e.name === 'AbortError') {
+      if (gen === assignmentsLoadGen && !assignmentsPoliciesLoaded) {
+        $('assignmentsLoadStatus').textContent = 'Cancelled. Click Refresh to index policies again.';
+      }
+      return;
+    }
+    if (gen !== assignmentsLoadGen) return;
+    console.error('Assignments policies load failed', e);
+    $('assignmentsLoadStatus').innerHTML = `<span style="color:#c0392b;">Failed to load policies: ${esc(e.message || String(e))}</span>`;
+  } finally {
+    if (gen === assignmentsLoadGen) {
+      assignmentsPoliciesLoading = false;
+      $('btnAssignmentsCancel').style.display = 'none';
+    }
+  }
+}
+
+async function searchGroupsForAssignments(query) {
+  const box = $('assignmentsSearchResults');
+  if (!query || query.length < 2) {
+    box.style.display = 'none';
+    return;
+  }
+  try {
+    // $search is substring/token-based across displayName — needs ConsistencyLevel: eventual.
+    // Much more forgiving than startswith() for users who paste partial names.
+    const term = `"displayName:${query.replace(/"/g, '')}"`;
+    const path = `v1.0/groups?$search=${encodeURIComponent(term)}&$top=50&$select=id,displayName,description&$count=true`;
+    const data = await graphGet(path, { headers: { ConsistencyLevel: 'eventual' } });
+    const groups = data.value || [];
+    const totalCount = data['@odata.count'];
+    const truncNote = (typeof totalCount === 'number' && totalCount > groups.length)
+      ? `<div class="meta" style="padding:8px 12px; font-size:11px;">Showing first ${groups.length} of ${totalCount} matches — refine your search to narrow down.</div>`
+      : '';
+    if (!groups.length) {
+      box.innerHTML = `<div class="meta" style="padding:12px;">No groups match "${esc(query)}"</div>`;
+    } else {
+      box.innerHTML = truncNote + groups.map(g => `
+        <div class="app-row" data-group-id="${esc(g.id)}" data-group-name="${esc(g.displayName)}" style="cursor:pointer;">
+          <div style="flex:1; min-width:0;">
+            <div class="name">${esc(g.displayName)}</div>
+            <div class="meta">${esc(g.description || g.id)}</div>
+          </div>
+        </div>
+      `).join('');
+      box.querySelectorAll('[data-group-id]').forEach(row => {
+        row.addEventListener('click', () => selectAssignmentsGroup({ id: row.dataset.groupId, displayName: row.dataset.groupName }));
+      });
+    }
+    box.style.display = '';
+  } catch (e) {
+    console.error('Group search failed', e);
+    box.innerHTML = `<div style="padding:12px; color:#c0392b; font-size:12px;">Search failed: ${esc(e.message || String(e))}</div>`;
+    box.style.display = '';
+  }
+}
+
+function selectAssignmentsGroup(group) {
+  assignmentsSelectedGroup = group;
+  $('assignmentsSearch').value = group.displayName;
+  $('assignmentsSearchResults').style.display = 'none';
+  $('assignmentsEmpty').style.display = 'none';
+  $('assignmentsView').style.display = '';
+  $('assignmentsGroupName').textContent = group.displayName;
+  $('assignmentsGroupMeta').textContent = `id: ${group.id}`;
+  if (assignmentsPoliciesLoaded) {
+    renderAssignmentsForGroup();
+  } else {
+    for (const id of ['aAppsRows', 'aConfigsRows', 'aComplianceRows', 'aRemediationsRows', 'aSettingsCatalogRows', 'aPsScriptsRows', 'aUpdatesRows']) {
+      $(id).innerHTML = `<tr><td colspan="5" class="loading">Waiting for policy index to finish…</td></tr>`;
+    }
+  }
+}
+
+// Find the assignment on a policy that targets the selected group (include or exclude),
+// returning { matched: bool, isExclusion: bool, filterId: string|null, raw: assignment }
+function findGroupAssignment(policy, groupId) {
+  for (const a of (policy.assignments || [])) {
+    const t = a.target || {};
+    const ttype = t['@odata.type'] || '';
+    const tgid = t.groupId;
+    if (tgid === groupId) {
+      const isExclusion = ttype === EXCLUSION_TARGET_TYPE;
+      const filterId = t.deviceAndAppManagementAssignmentFilterId || null;
+      return { matched: true, isExclusion, filterId, raw: a };
+    }
+  }
+  return { matched: false };
+}
+
+function fmtIsoDate(s) {
+  if (!s) return '—';
+  try { return new Date(s).toLocaleString(); } catch { return s; }
+}
+
+function appsBladeUrl(id) {
+  return `https://intune.microsoft.com/#view/Microsoft_Intune_Apps/SettingsMenu/~/0/appId/${encodeURIComponent(id)}`;
+}
+
+function configurationProfileBladeUrl(id) {
+  return `https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/DevicesMenu/~/configuration`;
+}
+
+function compliancePolicyBladeUrl(id) {
+  return `https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/DevicesMenu/~/compliance`;
+}
+
+function platformFromCompliancePolicyType(p) {
+  const t = (p['@odata.type'] || '').toLowerCase();
+  if (t.includes('windows')) return 'Windows';
+  if (t.includes('android')) return 'Android';
+  if (t.includes('ios')) return 'iOS';
+  if (t.includes('macos')) return 'macOS';
+  return '—';
+}
+
+function configurationProfileType(p) {
+  const t = (p['@odata.type'] || '').replace('#microsoft.graph.', '');
+  return t || '—';
+}
+
+function renderAssignmentsForGroup() {
+  if (!assignmentsSelectedGroup) return;
+  const gid = assignmentsSelectedGroup.id;
+
+  const renderSection = (rowsId, countId, kpiId, matches, colspan, rowFn) => {
+    $(countId).textContent = `(${matches.length})`;
+    if (kpiId) $(kpiId).textContent = matches.length;
+    if (!matches.length) {
+      $(rowsId).innerHTML = `<tr><td colspan="${colspan}" class="empty">No policies of this type assigned to this group.</td></tr>`;
+    } else {
+      $(rowsId).innerHTML = matches.map(rowFn).join('');
+    }
+  };
+
+  const exclTag = a => a.isExclusion
+    ? `<span style="display:inline-block; padding:1px 8px; border-radius:4px; font-size:11px; font-weight:600; background:#fcdede; color:#992020;">Excluded</span>`
+    : '—';
+  const filterTag = a => a.filterId
+    ? `<code style="font-size:11px;">${esc(a.filterId)}</code>`
+    : '—';
+
+  // Apps
+  const appMatches = [];
+  for (const app of assignmentsRaw.apps) {
+    if (!app.assignments) continue;
+    for (const a of app.assignments) {
+      const t = a.target || {};
+      if (t.groupId === gid) {
+        appMatches.push({
+          id: app.id, name: app.displayName, lastModified: app.lastModifiedDateTime,
+          intent: a.intent || '—',
+          filterId: t.deviceAndAppManagementAssignmentFilterId || null,
+          isExclusion: (t['@odata.type'] || '') === EXCLUSION_TARGET_TYPE
+        });
+      }
+    }
+  }
+  renderSection('aAppsRows', 'aAppsCount', 'kAssignmentsApps', appMatches, 5, m => `
+    <tr>
+      <td><a href="${appsBladeUrl(m.id)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(m.name)}</a></td>
+      <td>${esc(m.intent)}</td>
+      <td>${filterTag(m)}</td>
+      <td>${exclTag(m)}</td>
+      <td class="date">${fmtIsoDate(m.lastModified)}</td>
+    </tr>
+  `);
+
+  // Configurations
+  const configMatches = [];
+  for (const p of assignmentsRaw.configs) {
+    const r = findGroupAssignment(p, gid);
+    if (r.matched) configMatches.push({ id: p.id, name: p.displayName || '—', type: configurationProfileType(p), lastModified: p.lastModifiedDateTime, ...r });
+  }
+  renderSection('aConfigsRows', 'aConfigsCount', 'kAssignmentsConfigs', configMatches, 5, m => `
+    <tr>
+      <td><a href="${configurationProfileBladeUrl(m.id)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(m.name)}</a></td>
+      <td><code style="font-size:11px;">${esc(m.type)}</code></td>
+      <td>${filterTag(m)}</td>
+      <td>${exclTag(m)}</td>
+      <td class="date">${fmtIsoDate(m.lastModified)}</td>
+    </tr>
+  `);
+
+  // Compliance
+  const complianceMatches = [];
+  for (const p of assignmentsRaw.compliance) {
+    const r = findGroupAssignment(p, gid);
+    if (r.matched) complianceMatches.push({ id: p.id, name: p.displayName || '—', platform: platformFromCompliancePolicyType(p), lastModified: p.lastModifiedDateTime, ...r });
+  }
+  renderSection('aComplianceRows', 'aComplianceCount', 'kAssignmentsCompliance', complianceMatches, 5, m => `
+    <tr>
+      <td><a href="${compliancePolicyBladeUrl(m.id)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(m.name)}</a></td>
+      <td>${esc(m.platform)}</td>
+      <td>${filterTag(m)}</td>
+      <td>${exclTag(m)}</td>
+      <td class="date">${fmtIsoDate(m.lastModified)}</td>
+    </tr>
+  `);
+
+  // Remediations (deviceHealthScripts) — schedule comes from THIS group's assignment
+  const remediationMatches = [];
+  for (const s of assignmentsRaw.healthScripts) {
+    for (const a of (s.assignments || [])) {
+      const t = a.target || {};
+      if (t.groupId === gid) {
+        const sched = scheduleLabelFromAssignment(a) || '—';
+        remediationMatches.push({
+          id: s.id, name: s.displayName || '—', schedule: sched,
+          isGlobalScript: !!s.isGlobalScript,
+          lastModified: s.lastModifiedDateTime,
+          isExclusion: (t['@odata.type'] || '') === EXCLUSION_TARGET_TYPE
+        });
+        break;
+      }
+    }
+  }
+  renderSection('aRemediationsRows', 'aRemediationsCount', 'kAssignmentsRemediations', remediationMatches, 4, m => `
+    <tr>
+      <td><a href="${remediationBladeUrl({ id: m.id, displayName: m.name, isGlobalScript: m.isGlobalScript })}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(m.name)}</a></td>
+      <td>${esc(m.schedule)}</td>
+      <td>${exclTag(m)}</td>
+      <td class="date">${fmtIsoDate(m.lastModified)}</td>
+    </tr>
+  `);
+
+  // Settings catalog (configurationPolicies) — note: uses `name` not `displayName`
+  const settingsCatalogMatches = [];
+  for (const p of assignmentsRaw.settingsCatalog) {
+    const r = findGroupAssignment(p, gid);
+    if (r.matched) settingsCatalogMatches.push({ id: p.id, name: p.name || '—', platform: p.platforms || '—', lastModified: p.lastModifiedDateTime, ...r });
+  }
+  renderSection('aSettingsCatalogRows', 'aSettingsCatalogCount', 'kAssignmentsSettingsCatalog', settingsCatalogMatches, 5, m => `
+    <tr>
+      <td><a href="https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/DevicesMenu/~/configuration" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(m.name)}</a></td>
+      <td>${esc(m.platform)}</td>
+      <td>${filterTag(m)}</td>
+      <td>${exclTag(m)}</td>
+      <td class="date">${fmtIsoDate(m.lastModified)}</td>
+    </tr>
+  `);
+
+  // PowerShell scripts (deviceManagementScripts, distinct from health scripts)
+  const psScriptMatches = [];
+  for (const s of assignmentsRaw.psScripts) {
+    const r = findGroupAssignment(s, gid);
+    if (r.matched) psScriptMatches.push({ id: s.id, name: s.displayName || '—', runAs: s.runAsAccount || '—', lastModified: s.lastModifiedDateTime, ...r });
+  }
+  renderSection('aPsScriptsRows', 'aPsScriptsCount', 'kAssignmentsPsScripts', psScriptMatches, 5, m => `
+    <tr>
+      <td><a href="https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/DevicesWindowsMenu/~/scripts" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(m.name)}</a></td>
+      <td>${esc(m.runAs)}</td>
+      <td>${filterTag(m)}</td>
+      <td>${exclTag(m)}</td>
+      <td class="date">${fmtIsoDate(m.lastModified)}</td>
+    </tr>
+  `);
+
+  // Windows Update profiles — Feature / Quality / Driver merged
+  const updateMatches = [];
+  for (const p of assignmentsRaw.updateProfiles) {
+    const r = findGroupAssignment(p, gid);
+    if (r.matched) updateMatches.push({ id: p.id, name: p.displayName || '—', updateType: p._updateType, lastModified: p.lastModifiedDateTime, ...r });
+  }
+  renderSection('aUpdatesRows', 'aUpdatesCount', 'kAssignmentsUpdates', updateMatches, 5, m => `
+    <tr>
+      <td><a href="https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/DevicesMenu/~/windows10Updates" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(m.name)}</a></td>
+      <td>${esc(m.updateType)}</td>
+      <td>${filterTag(m)}</td>
+      <td>${exclTag(m)}</td>
+      <td class="date">${fmtIsoDate(m.lastModified)}</td>
+    </tr>
+  `);
+}
+
+$('assignmentsSearch').addEventListener('input', e => {
+  clearTimeout(assignmentsSearchTimer);
+  const q = e.target.value.trim();
+  if (!q) { $('assignmentsSearchResults').style.display = 'none'; return; }
+  assignmentsSearchTimer = setTimeout(() => searchGroupsForAssignments(q), 300);
+});
+$('assignmentsSearch').addEventListener('blur', () => {
+  // delay so click on result registers first
+  setTimeout(() => { $('assignmentsSearchResults').style.display = 'none'; }, 200);
+});
+$('assignmentsSearch').addEventListener('focus', () => {
+  const q = $('assignmentsSearch').value.trim();
+  if (q.length >= 2) searchGroupsForAssignments(q);
+});
+$('btnAssignmentsRefresh').addEventListener('click', () => {
+  assignmentsRaw = { apps: [], configs: [], compliance: [], healthScripts: [], settingsCatalog: [], psScripts: [], updateProfiles: [] };
+  hygieneFiltersRaw = [];
+  hygieneGroupMembers = new Map();
+  hygieneComputed = null;
+  assignmentsPoliciesLoaded = false;
+  loadAssignmentsPolicies(true);
+});
+$('btnAssignmentsCancel').addEventListener('click', cancelAssignmentsLoad);
+
+// ============================================================
+// Assignment Hygiene — surfaces cruft on top of the existing
+// assignments cache: items with no assignments, assignments
+// pointing at empty groups, and orphaned assignment filters.
+// Reuses assignmentsRaw; adds /assignmentFilters + per-group
+// /members/$count calls (parallelized). All read-only.
+// ============================================================
+let hygieneFiltersRaw = [];
+let hygieneGroupMembers = new Map(); // groupId → memberCount
+let hygieneComputed = null;          // cached compute result
+
+const HYGIENE_CATEGORIES = [
+  { key: 'apps',            label: 'App' },
+  { key: 'configs',         label: 'Config profile' },
+  { key: 'compliance',      label: 'Compliance policy' },
+  { key: 'settingsCatalog', label: 'Settings catalog' },
+  { key: 'healthScripts',   label: 'Remediation' },
+  { key: 'psScripts',       label: 'PowerShell script' },
+  { key: 'updateProfiles',  label: 'Update profile' }
+];
+
+// Best-effort deep-links into the Intune admin center per category.
+// URLs are not officially documented by Microsoft — when a per-item URL
+// is fragile we keep the per-item parameters anyway so the admin center
+// can route to the right blade or land you on the right area.
+function intuneBladeUrl(category, item) {
+  const id = encodeURIComponent(item.id || '');
+  const name = encodeURIComponent(item.displayName || item.name || '');
+  switch (category) {
+    case 'apps':
+      return `https://intune.microsoft.com/#view/Microsoft_Intune_Apps/SettingsMenu/~/0/appId/${id}`;
+    case 'configs':
+      // The blade rejects the link without an isAssigned parameter (issue #7).
+      return `https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/PolicySummaryReportBlade/policyId/${id}/policyName/${name}/policyJourneyState~/0/policyType~/0/isAssigned~/${item.isAssigned === false ? 'false' : 'true'}`;
+    case 'compliance':
+      return `https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/CompliancePolicySummaryBlade/policyId/${id}/policyName/${name}`;
+    case 'settingsCatalog':
+      return `https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/SettingsCatalogPolicy.ReactView/configurationPolicyId/${id}/isAssigned~/${item.isAssigned === false ? 'false' : 'true'}`;
+    case 'healthScripts':
+      return `https://intune.microsoft.com/#view/Microsoft_Intune_Enrollment/UXAnalyticsScriptMenu/~/overview/id/${id}/scriptName/${name}/isFirstParty~/${item.isGlobalScript ? 'true' : 'false'}`;
+    case 'psScripts':
+      return `https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/ConfigurationMenuBlade/~/properties/policyId/${id}`;
+    case 'updateProfiles':
+      return `https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/SoftwareUpdateMenuBlade`;
+    default:
+      return `https://intune.microsoft.com/`;
+  }
+}
+
+function entraGroupUrl(groupId) {
+  return `https://entra.microsoft.com/#view/Microsoft_AAD_IAM/GroupDetailsMenuBlade/~/Overview/groupId/${encodeURIComponent(groupId)}`;
+}
+
+// Per-filter blade URL. The admin center routes by filter ID regardless
+// of the filterType param — 2 is the current default value used by the
+// portal across platforms (Windows desktop, AVD, etc.).
+function assignmentFilterUrl(filter) {
+  if (!filter || !filter.id) {
+    return `https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/AssignmentFiltersMenu/~/filters`;
+  }
+  return `https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/AssignmentFilterSummaryBlade/assignmentFilterId/${encodeURIComponent(filter.id)}/filterType~/2`;
+}
+
+function linkedName(category, item) {
+  const url = intuneBladeUrl(category, item);
+  const name = esc(item.displayName || item.name || '(unnamed)');
+  return `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${name}</a>`;
+}
+
+function intuneDeviceUrl(managedDeviceId, pivot = 'overview') {
+  return `https://intune.microsoft.com/#view/Microsoft_Intune_Devices/DeviceSettingsMenuBlade/~/${pivot}/mdmDeviceId/${encodeURIComponent(managedDeviceId)}`;
+}
+
+async function fetchGroupMemberCount(groupId) {
+  try {
+    const token = await getToken();
+    const res = await fetch(`https://graph.microsoft.com/v1.0/groups/${encodeURIComponent(groupId)}/members/$count`, {
+      headers: { Authorization: 'Bearer ' + token, 'ConsistencyLevel': 'eventual', Accept: 'text/plain' }
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    const n = parseInt(text, 10);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+function collectAssignmentGroupIds() {
+  const ids = new Set();
+  for (const cat of HYGIENE_CATEGORIES) {
+    for (const item of (assignmentsRaw[cat.key] || [])) {
+      for (const a of (item.assignments || [])) {
+        const gid = a.target && a.target.groupId;
+        if (gid) ids.add(gid);
+      }
+    }
+  }
+  return ids;
+}
+
+async function computeAssignmentHygiene() {
+  if (!assignmentsPoliciesLoaded) return;
+  $('hygieneStatus').textContent = 'Computing hygiene — fetching assignment filters and group member counts…';
+
+  // Filters list — independent fetch
+  let filters = [];
+  try {
+    filters = await graphGetAll('beta/deviceManagement/assignmentFilters');
+  } catch (e) {
+    console.warn('Failed to load assignmentFilters', e);
+    filters = [];
+  }
+  hygieneFiltersRaw = filters;
+
+  // Group member counts — parallelized for all referenced groups
+  const groupIds = [...collectAssignmentGroupIds()];
+  const missing = groupIds.filter(id => !hygieneGroupMembers.has(id));
+  if (missing.length) {
+    const results = await Promise.all(missing.map(id => fetchGroupMemberCount(id).then(n => [id, n])));
+    for (const [id, n] of results) hygieneGroupMembers.set(id, n);
+  }
+
+  // Compute the four lists
+  const unassigned = [];
+  for (const cat of HYGIENE_CATEGORIES) {
+    for (const item of (assignmentsRaw[cat.key] || [])) {
+      const count = (item.assignments || []).length;
+      if (count === 0) {
+        unassigned.push({ category: cat.key, categoryLabel: cat.label, id: item.id, name: item.displayName || item.name || '(unnamed)', lastModified: item.lastModifiedDateTime || '' });
+      }
+    }
+  }
+
+  const emptyGroup = [];
+  const filterRefs = new Map(); // filterId → array of {category, itemName, groupId}
+  for (const cat of HYGIENE_CATEGORIES) {
+    for (const item of (assignmentsRaw[cat.key] || [])) {
+      for (const a of (item.assignments || [])) {
+        const gid = a.target && a.target.groupId;
+        if (gid) {
+          const count = hygieneGroupMembers.get(gid);
+          if (count === 0) {
+            emptyGroup.push({
+              category: cat.key, categoryLabel: cat.label,
+              itemId: item.id, itemName: item.displayName || item.name || '(unnamed)',
+              groupId: gid, intent: a.intent || '', isExclusion: (a.target['@odata.type'] || '').includes('exclusion')
+            });
+          }
+        }
+        const fid = a.target && a.target.deviceAndAppManagementAssignmentFilterId;
+        if (fid) {
+          if (!filterRefs.has(fid)) filterRefs.set(fid, []);
+          filterRefs.get(fid).push({ category: cat.key, categoryLabel: cat.label, itemId: item.id, itemName: item.displayName || item.name || '(unnamed)' });
+        }
+      }
+    }
+  }
+
+  const orphanedFilters = filters.filter(f => !filterRefs.has(f.id));
+  const filtersInUse = filters.filter(f => filterRefs.has(f.id));
+
+  hygieneComputed = { unassigned, emptyGroup, orphanedFilters, filtersInUse, filterRefs };
+
+  $('kHygUnassigned').textContent = unassigned.length;
+  $('kHygEmptyGroup').textContent = emptyGroup.length;
+  $('kHygOrphanedFilters').textContent = orphanedFilters.length;
+  $('kHygFiltersInUse').textContent = filtersInUse.length;
+  $('hygieneStatus').textContent = `Hygiene snapshot: ${filters.length} assignment filters · ${groupIds.length} unique groups referenced.`;
+}
+
+function closeHygieneDetail() {
+  $('hygieneDetail').style.display = 'none';
+  $('hygieneDetail').innerHTML = '';
+}
+
+function renderHygieneDetail(kind) {
+  if (!hygieneComputed) return;
+  const panel = $('hygieneDetail');
+  let title = '';
+  let tableHtml = '';
+  // Map: filter id → list of referencing items (with category for re-linking)
+  const filterRefs = hygieneComputed.filterRefs || new Map();
+
+  if (kind === 'unassigned') {
+    title = `Unassigned items (${hygieneComputed.unassigned.length})`;
+    const rows = hygieneComputed.unassigned;
+    tableHtml = !rows.length
+      ? `<div class="meta" style="padding:18px;">No unassigned items — everything is targeting something.</div>`
+      : `<table><thead><tr><th>Name</th><th>Type</th><th>Last modified</th></tr></thead><tbody>${rows.map(r => {
+          const link = linkedName(r.category, { id: r.id, displayName: r.name, isAssigned: false });
+          return `<tr><td>${link}</td><td>${esc(r.categoryLabel)}</td><td class="date">${r.lastModified ? new Date(r.lastModified).toLocaleString() : '—'}</td></tr>`;
+        }).join('')}</tbody></table>`;
+  } else if (kind === 'emptyGroup') {
+    title = `Assignments targeting empty groups (${hygieneComputed.emptyGroup.length})`;
+    const rows = hygieneComputed.emptyGroup;
+    tableHtml = !rows.length
+      ? `<div class="meta" style="padding:18px;">No empty-group assignments — every targeted group has at least one member.</div>`
+      : `<table><thead><tr><th>Item</th><th>Type</th><th>Intent</th><th>Group</th></tr></thead><tbody>${rows.map(r => `
+          <tr>
+            <td>${linkedName(r.category, { id: r.itemId, displayName: r.itemName })}</td>
+            <td>${esc(r.categoryLabel)}</td>
+            <td>${esc(r.intent || '—')}${r.isExclusion ? ' <span class="meta" style="font-size:11px;">(exclusion)</span>' : ''}</td>
+            <td><a href="${entraGroupUrl(r.groupId)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none; font-family:ui-monospace,monospace; font-size:11px;">${esc(r.groupId)}</a></td>
+          </tr>
+        `).join('')}</tbody></table>`;
+  } else if (kind === 'orphanedFilters') {
+    title = `Orphaned assignment filters (${hygieneComputed.orphanedFilters.length})`;
+    const rows = hygieneComputed.orphanedFilters;
+    tableHtml = !rows.length
+      ? `<div class="meta" style="padding:18px;">No orphaned filters — every assignment filter is referenced by at least one assignment.</div>`
+      : `<table><thead><tr><th>Filter name</th><th>Platform</th><th>Created</th><th>Last modified</th></tr></thead><tbody>${rows.map(f => `
+          <tr>
+            <td><a href="${assignmentFilterUrl(f)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(f.displayName || '(unnamed)')}</a></td>
+            <td>${esc(f.platform || '—')}</td>
+            <td class="date">${f.createdDateTime ? new Date(f.createdDateTime).toLocaleString() : '—'}</td>
+            <td class="date">${f.lastModifiedDateTime ? new Date(f.lastModifiedDateTime).toLocaleString() : '—'}</td>
+          </tr>
+        `).join('')}</tbody></table>`;
+  } else if (kind === 'filtersInUse') {
+    title = `Assignment filters in use (${hygieneComputed.filtersInUse.length})`;
+    const rows = hygieneComputed.filtersInUse;
+    tableHtml = !rows.length
+      ? `<div class="meta" style="padding:18px;">No filters are currently referenced.</div>`
+      : `<table><thead><tr><th>Filter name</th><th>Platform</th><th>Referenced by</th></tr></thead><tbody>${rows.map(f => {
+          const refs = filterRefs.get(f.id) || [];
+          const refList = refs.slice(0, 8).map(r => `${linkedName(r.category, { id: r.itemId, displayName: r.itemName })} <span class="meta" style="font-size:11px;">(${esc(r.categoryLabel)})</span>`).join('<br>');
+          const more = refs.length > 8 ? `<div class="meta" style="font-size:11px; margin-top:4px;">…and ${refs.length - 8} more</div>` : '';
+          return `<tr><td><a href="${assignmentFilterUrl(f)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(f.displayName || '(unnamed)')}</a></td><td>${esc(f.platform || '—')}</td><td>${refList}${more}</td></tr>`;
+        }).join('')}</tbody></table>`;
+  }
+  panel.innerHTML = `
+    <div class="table-card">
+      <div class="table-toolbar">
+        <h2>${esc(title)}</h2>
+        <div class="controls">
+          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" onclick="closeHygieneDetail()">✕ Close</span>
+        </div>
+      </div>
+      ${tableHtml}
+    </div>
+  `;
+  panel.style.display = '';
+}
+
+document.querySelectorAll('[data-hygiene-tile]').forEach(tile => {
+  tile.addEventListener('click', () => {
+    if (!hygieneComputed) return;
+    renderHygieneDetail(tile.dataset.hygieneTile);
+  });
+});
+
+// ============================================================
+// Posture sub-tab — compliance + Conditional Access audit for
+// MSP customer reviews. Compliance uses existing configuration
+// scopes. Policy.Read.All is optional (JIT) for the CA section.
+// ============================================================
+let postureLoaded = false;
+let postureLoading = false;
+let postureTileFilter = null; // null | tile key
+let postureComp = null;       // computed compliance result
+let postureCa = null;         // computed CA result (null if not loaded)
+let postureCaGranted = null;  // null unknown | true | false
+
+const POSTURE_CA_STALE_DAYS = 30;
+const POLICY_READ_ALL = 'Policy.Read.All';
+
+const COMPLIANCE_BLADE = 'https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/DevicesMenu/~/compliance';
+const CA_BLADE = 'https://entra.microsoft.com/#view/Microsoft_AAD_ConditionalAccess/ConditionalAccessBlade/~/Policies';
+const COMPLIANCE_SETTINGS_BLADE = 'https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/DevicesMenu/~/compliancePolicies';
+
+async function hasPolicyReadAll() {
+  if (!msalApp || !msalApp.getActiveAccount()) return false;
+  try {
+    const r = await msalApp.acquireTokenSilent({
+      scopes: [POLICY_READ_ALL],
+      account: msalApp.getActiveAccount()
+    });
+    return (r.scopes || []).some(s => s.toLowerCase() === POLICY_READ_ALL.toLowerCase());
+  } catch (_) {
+    return false;
+  }
+}
+
+function compliancePolicyPlatform(p) {
+  const t = (p['@odata.type'] || '').toLowerCase();
+  if (t.includes('windows')) return 'Windows';
+  if (t.includes('android')) return 'Android';
+  if (t.includes('ios') || t.includes('ipad')) return 'iOS';
+  if (t.includes('mac')) return 'macOS';
+  if (t.includes('linux')) return 'Linux';
+  if (t.includes('aosp')) return 'Android (AOSP)';
+  return 'Other';
+}
+
+function compliancePolicyMinGraceHours(p) {
+  let min = null;
+  for (const rule of (p.scheduledActionsForRule || [])) {
+    for (const cfg of (rule.scheduledActionConfigurations || [])) {
+      const h = cfg.gracePeriodHours;
+      if (typeof h === 'number' && !Number.isNaN(h)) {
+        if (min == null || h < min) min = h;
+      }
+    }
+  }
+  return min;
+}
+
+function isDeviceAssignmentTarget(target, groupMeta) {
+  if (!target) return false;
+  const t = (target['@odata.type'] || '').toLowerCase();
+  if (t.includes('alldevices')) return true;
+  if (t.includes('alllicensedusers') || t.includes('allusers')) return false;
+  if (t.includes('exclusion')) {
+    // still count exclusion of device groups as device-targeted pattern
+  }
+  const gid = target.groupId;
+  if (!gid) return false;
+  const g = groupMeta.get(gid);
+  if (!g) return false;
+  // Dynamic device groups typically use membershipRule expressions on device.
+  if (g.membershipRule && /device\./i.test(g.membershipRule)) return true;
+  return false;
+}
+
+async function loadPostureCompliance() {
+  let secureByDefault = null;
+  try {
+    const settings = await graphGet('beta/deviceManagement/settings');
+    if (settings && typeof settings.secureByDefault === 'boolean') {
+      secureByDefault = settings.secureByDefault;
+    }
+  } catch (e) {
+    console.warn('Posture: deviceManagement/settings failed', e);
+    try {
+      const dm = await graphGet('beta/deviceManagement');
+      if (dm && typeof dm.secureByDefault === 'boolean') secureByDefault = dm.secureByDefault;
+    } catch (e2) {
+      console.warn('Posture: deviceManagement singleton failed', e2);
+    }
+  }
+
+  let policies = [];
+  try {
+    policies = await graphGetAll(
+      'beta/deviceManagement/deviceCompliancePolicies?$expand=assignments,scheduledActionsForRule'
+    );
+  } catch (e) {
+    // Some tenants reject the dual expand — fall back to assignments only.
+    console.warn('Posture: expand scheduledActionsForRule failed, retrying without', e);
+    policies = await graphGetAll(
+      'beta/deviceManagement/deviceCompliancePolicies?$expand=assignments'
+    );
+  }
+
+  const groupIds = new Set();
+  for (const p of policies) {
+    for (const a of (p.assignments || [])) {
+      const gid = a.target && a.target.groupId;
+      if (gid) groupIds.add(gid);
+    }
+  }
+  const groupMeta = new Map();
+  await mapPool([...groupIds], 10, async (id) => {
+    try {
+      const g = await graphGet(
+        `v1.0/groups/${encodeURIComponent(id)}?$select=id,displayName,membershipRule,groupTypes`
+      );
+      groupMeta.set(id, g);
+    } catch (_) {
+      groupMeta.set(id, { id, displayName: id });
+    }
+  });
+
+  const unsafeDefault = secureByDefault === false;
+  const noGrace = [];
+  const deviceTargeted = [];
+  const platformBuckets = new Map(); // platform → count of assigned policies
+
+  for (const p of policies) {
+    const name = p.displayName || '(unnamed)';
+    const plat = compliancePolicyPlatform(p);
+    const assigned = (p.assignments || []).length > 0;
+    if (assigned) {
+      platformBuckets.set(plat, (platformBuckets.get(plat) || 0) + 1);
+    }
+
+    const minGrace = compliancePolicyMinGraceHours(p);
+    if (minGrace === 0) {
+      noGrace.push({
+        id: p.id, name, platform: plat, gracePeriodHours: 0,
+        lastModified: p.lastModifiedDateTime || ''
+      });
+    }
+
+    let deviceHit = false;
+    const targetLabels = [];
+    for (const a of (p.assignments || [])) {
+      const t = a.target || {};
+      if (isDeviceAssignmentTarget(t, groupMeta)) {
+        deviceHit = true;
+        const ttype = (t['@odata.type'] || '').toLowerCase();
+        if (ttype.includes('alldevices')) targetLabels.push('All devices');
+        else if (t.groupId) {
+          const g = groupMeta.get(t.groupId);
+          targetLabels.push(g && g.displayName ? g.displayName : t.groupId);
+        }
+      }
+    }
+    if (deviceHit) {
+      deviceTargeted.push({
+        id: p.id, name, platform: plat,
+        targets: targetLabels.join('; ') || 'device group',
+        lastModified: p.lastModifiedDateTime || ''
+      });
+    }
+  }
+
+  // "No platform split": assigned policies on only one platform while ≥1 assigned,
+  // plus any policy typed as Other (non platform-specific).
+  const assignedPlatforms = [...platformBuckets.keys()].filter(k => k !== 'Other' && (platformBuckets.get(k) || 0) > 0);
+  const noPlatformSplit = [];
+  if (assignedPlatforms.length === 1) {
+    const only = assignedPlatforms[0];
+    for (const p of policies) {
+      if (!(p.assignments || []).length) continue;
+      if (compliancePolicyPlatform(p) === only) {
+        noPlatformSplit.push({
+          id: p.id,
+          name: p.displayName || '(unnamed)',
+          platform: only,
+          reason: `Only platform with assigned compliance policies: ${only}`,
+          lastModified: p.lastModifiedDateTime || ''
+        });
+      }
+    }
+  }
+  for (const p of policies) {
+    if (!(p.assignments || []).length) continue;
+    if (compliancePolicyPlatform(p) === 'Other') {
+      noPlatformSplit.push({
+        id: p.id,
+        name: p.displayName || '(unnamed)',
+        platform: 'Other',
+        reason: 'Non-platform-specific compliance policy type',
+        lastModified: p.lastModifiedDateTime || ''
+      });
+    }
+  }
+
+  return {
+    secureByDefault,
+    unsafeDefault,
+    unsafeItems: unsafeDefault
+      ? [{ name: 'Tenant compliance setting', detail: 'Devices with no compliance policy are marked Compliant (secureByDefault = false)', blade: COMPLIANCE_SETTINGS_BLADE }]
+      : (secureByDefault === true
+        ? []
+        : [{ name: 'Could not read secureByDefault', detail: 'Graph did not return deviceManagement settings — check DeviceManagementConfiguration.Read.All', blade: COMPLIANCE_SETTINGS_BLADE }]),
+    noGrace,
+    deviceTargeted,
+    noPlatformSplit,
+    policyCount: policies.length,
+    platformsCovered: assignedPlatforms
+  };
+}
+
+function caPolicyRequiresDevice(p) {
+  const controls = (p.grantControls && p.grantControls.builtInControls) || [];
+  return controls.some(c => {
+    const s = String(c).toLowerCase();
+    return s === 'compliantdevice' || s === 'domainjoineddevice';
+  });
+}
+
+function caBlocksLegacyAuth(p) {
+  if ((p.state || '') !== 'enabled') return false;
+  const norm = ((p.conditions && p.conditions.clientAppTypes) || []).map(a => String(a).toLowerCase());
+  // Microsoft's "Block legacy authentication" template uses EAS + other.
+  // Also accept clientAppTypes all / empty (all clients) with a Block grant.
+  const explicitLegacy = norm.includes('exchangeactivesync') && norm.includes('other');
+  const allClients = !norm.length || norm.includes('all');
+  if (!explicitLegacy && !allClients) return false;
+  const builtIn = ((p.grantControls && p.grantControls.builtInControls) || []).map(c => String(c).toLowerCase());
+  return builtIn.includes('block');
+}
+
+async function loadPostureCa() {
+  const token = await ensureScopeToken(POLICY_READ_ALL);
+  const policies = await graphGetAll('v1.0/identity/conditionalAccess/policies', { token });
+  const now = Date.now();
+  const staleMs = POSTURE_CA_STALE_DAYS * 86400000;
+
+  const reportOnlyStale = [];
+  const compliantGap = [];
+  let legacyBlocked = false;
+  const legacyBlockers = [];
+
+  for (const p of policies) {
+    const name = p.displayName || '(unnamed)';
+    const state = p.state || '';
+    const modified = p.modifiedDateTime || p.createdDateTime || '';
+    const modMs = modified ? Date.parse(modified) : NaN;
+
+    if (state === 'enabledForReportingButNotEnforced') {
+      if (!Number.isNaN(modMs) && (now - modMs) > staleMs) {
+        reportOnlyStale.push({
+          id: p.id, name, state, modified,
+          ageDays: Math.floor((now - modMs) / 86400000)
+        });
+      }
+    }
+
+    if (state === 'enabled') {
+      const grant = p.grantControls;
+      const builtIn = (grant && grant.builtInControls) || [];
+      // Only flag grant policies that allow access (not pure block)
+      const isBlockOnly = builtIn.length === 1 && String(builtIn[0]).toLowerCase() === 'block';
+      if (grant && !isBlockOnly && !caPolicyRequiresDevice(p)) {
+        compliantGap.push({
+          id: p.id, name, state,
+          grants: builtIn.join(', ') || '—',
+          modified
+        });
+      }
+    }
+
+    if (caBlocksLegacyAuth(p)) {
+      legacyBlocked = true;
+      legacyBlockers.push({ id: p.id, name, state, modified });
+    }
+  }
+
+  return {
+    reportOnlyStale,
+    compliantGap,
+    legacyAuthNotBlocked: !legacyBlocked,
+    legacyBlockers,
+    policyCount: policies.length
+  };
+}
+
+function syncPostureTileUi() {
+  document.querySelectorAll('#intuneSubPosture [data-posture-tile]').forEach(tile => {
+    const key = tile.dataset.postureTile;
+    tile.classList.toggle('active', postureTileFilter === key);
+  });
+  $('btnPostureClearKpi').style.display = postureTileFilter ? '' : 'none';
+}
+
+function renderPostureTiles() {
+  if (postureComp) {
+    $('pTileUnsafe').textContent = postureComp.secureByDefault === null
+      ? '?'
+      : (postureComp.unsafeDefault ? '1' : '0');
+    $('pTileNoGrace').textContent = postureComp.noGrace.length;
+    $('pTileDevice').textContent = postureComp.deviceTargeted.length;
+    $('pTilePlatform').textContent = postureComp.noPlatformSplit.length;
+    // Stoplight classes
+    const unsafeEl = document.querySelector('#intuneSubPosture [data-posture-tile="unsafeDefault"]');
+    if (unsafeEl) {
+      unsafeEl.classList.toggle('tile-bad', !!postureComp.unsafeDefault);
+      unsafeEl.classList.toggle('tile-good', postureComp.secureByDefault === true);
+    }
+  }
+  if (postureCa) {
+    $('pTileReportOnly').textContent = postureCa.reportOnlyStale.length;
+    $('pTileCompliantGap').textContent = postureCa.compliantGap.length;
+    $('pTileLegacy').textContent = postureCa.legacyAuthNotBlocked ? '1' : '0';
+    const leg = document.querySelector('#intuneSubPosture [data-posture-tile="legacyAuth"]');
+    if (leg) {
+      leg.classList.toggle('tile-bad', postureCa.legacyAuthNotBlocked);
+      leg.classList.toggle('tile-good', !postureCa.legacyAuthNotBlocked);
+    }
+  }
+  syncPostureTileUi();
+}
+
+function postureCompBlade(id) {
+  return COMPLIANCE_BLADE;
+}
+
+function postureCaBlade(id) {
+  return id
+    ? `https://entra.microsoft.com/#view/Microsoft_AAD_ConditionalAccess/PolicyBlade/policyId/${encodeURIComponent(id)}`
+    : CA_BLADE;
+}
+
+function renderPostureDetail(kind) {
+  const isCa = ['reportOnlyStale', 'compliantGap', 'legacyAuth'].includes(kind);
+  const panel = $(isCa ? 'postureCaDetail' : 'postureCompDetail');
+  const other = $(isCa ? 'postureCompDetail' : 'postureCaDetail');
+  if (other) { other.style.display = 'none'; other.innerHTML = ''; }
+
+  let title = '';
+  let tableHtml = '';
+
+  if (kind === 'unsafeDefault' && postureComp) {
+    title = 'Unsafe default (no policy = compliant)';
+    const rows = postureComp.unsafeItems || [];
+    tableHtml = rows.map(r => `
+      <tr>
+        <td><a href="${esc(r.blade)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.name)}</a></td>
+        <td>${esc(r.detail)}</td>
+      </tr>`).join('');
+    tableHtml = `<table><thead><tr><th>Setting</th><th>Detail</th></tr></thead><tbody>${tableHtml || '<tr><td colspan="2" class="empty">secureByDefault is true — devices without a policy are noncompliant.</td></tr>'}</tbody></table>`;
+  } else if (kind === 'noGrace' && postureComp) {
+    title = `No grace period (${postureComp.noGrace.length})`;
+    tableHtml = !postureComp.noGrace.length
+      ? `<div class="meta" style="padding:18px;">No compliance policies with gracePeriodHours = 0.</div>`
+      : `<table><thead><tr><th>Policy</th><th>Platform</th><th>Grace (h)</th><th>Last modified</th></tr></thead><tbody>${postureComp.noGrace.map(r => `
+          <tr>
+            <td><a href="${postureCompBlade(r.id)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.name)}</a></td>
+            <td>${esc(r.platform)}</td>
+            <td>${r.gracePeriodHours}</td>
+            <td class="date">${r.lastModified ? new Date(r.lastModified).toLocaleString() : '—'}</td>
+          </tr>`).join('')}</tbody></table>`;
+  } else if (kind === 'deviceTargeted' && postureComp) {
+    title = `Device-targeted compliance (${postureComp.deviceTargeted.length})`;
+    tableHtml = !postureComp.deviceTargeted.length
+      ? `<div class="meta" style="padding:18px;">No compliance policies assigned to device groups or All devices.</div>`
+      : `<table><thead><tr><th>Policy</th><th>Platform</th><th>Targets</th><th>Last modified</th></tr></thead><tbody>${postureComp.deviceTargeted.map(r => `
+          <tr>
+            <td><a href="${postureCompBlade(r.id)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.name)}</a></td>
+            <td>${esc(r.platform)}</td>
+            <td>${esc(r.targets)}</td>
+            <td class="date">${r.lastModified ? new Date(r.lastModified).toLocaleString() : '—'}</td>
+          </tr>`).join('')}</tbody></table>`;
+  } else if (kind === 'noPlatformSplit' && postureComp) {
+    title = `No platform split (${postureComp.noPlatformSplit.length})`;
+    const platforms = (postureComp.platformsCovered || []).join(', ') || '—';
+    tableHtml = !postureComp.noPlatformSplit.length
+      ? `<div class="meta" style="padding:18px;">Assigned compliance policies cover multiple platforms (${esc(platforms)}).</div>`
+      : `<div class="meta" style="padding:8px 0 12px;">Platforms with assigned policies: <strong>${esc(platforms)}</strong></div>
+        <table><thead><tr><th>Policy</th><th>Platform</th><th>Reason</th><th>Last modified</th></tr></thead><tbody>${postureComp.noPlatformSplit.map(r => `
+          <tr>
+            <td><a href="${postureCompBlade(r.id)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.name)}</a></td>
+            <td>${esc(r.platform)}</td>
+            <td>${esc(r.reason)}</td>
+            <td class="date">${r.lastModified ? new Date(r.lastModified).toLocaleString() : '—'}</td>
+          </tr>`).join('')}</tbody></table>`;
+  } else if (kind === 'reportOnlyStale' && postureCa) {
+    title = `Report-only stale &gt; ${POSTURE_CA_STALE_DAYS}d (${postureCa.reportOnlyStale.length})`;
+    tableHtml = !postureCa.reportOnlyStale.length
+      ? `<div class="meta" style="padding:18px;">No report-only CA policies older than ${POSTURE_CA_STALE_DAYS} days.</div>`
+      : `<table><thead><tr><th>Policy</th><th>Age (days)</th><th>Last modified</th></tr></thead><tbody>${postureCa.reportOnlyStale.map(r => `
+          <tr>
+            <td><a href="${postureCaBlade(r.id)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.name)}</a></td>
+            <td>${r.ageDays}</td>
+            <td class="date">${r.modified ? new Date(r.modified).toLocaleString() : '—'}</td>
+          </tr>`).join('')}</tbody></table>`;
+  } else if (kind === 'compliantGap' && postureCa) {
+    title = `Compliant-device gap (${postureCa.compliantGap.length})`;
+    tableHtml = !postureCa.compliantGap.length
+      ? `<div class="meta" style="padding:18px;">Every enabled grant policy requires compliantDevice or domainJoinedDevice (or is block-only).</div>`
+      : `<table><thead><tr><th>Policy</th><th>Grant controls</th><th>Last modified</th></tr></thead><tbody>${postureCa.compliantGap.map(r => `
+          <tr>
+            <td><a href="${postureCaBlade(r.id)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.name)}</a></td>
+            <td>${esc(r.grants)}</td>
+            <td class="date">${r.modified ? new Date(r.modified).toLocaleString() : '—'}</td>
+          </tr>`).join('')}</tbody></table>`;
+  } else if (kind === 'legacyAuth' && postureCa) {
+    title = postureCa.legacyAuthNotBlocked
+      ? 'Legacy auth not blocked'
+      : 'Legacy auth is blocked';
+    if (postureCa.legacyAuthNotBlocked) {
+      tableHtml = `<div class="meta" style="padding:18px;">No enabled Conditional Access policy was found that blocks <code>exchangeActiveSync</code> + <code>other</code> (legacy clients). Create a Block legacy authentication policy in Entra.
+        <div style="margin-top:10px;"><a href="${CA_BLADE}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">Open Conditional Access policies ↗</a></div></div>`;
+    } else {
+      tableHtml = `<table><thead><tr><th>Blocking policy</th><th>State</th><th>Last modified</th></tr></thead><tbody>${postureCa.legacyBlockers.map(r => `
+          <tr>
+            <td><a href="${postureCaBlade(r.id)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.name)}</a></td>
+            <td>${esc(r.state)}</td>
+            <td class="date">${r.modified ? new Date(r.modified).toLocaleString() : '—'}</td>
+          </tr>`).join('')}</tbody></table>`;
+    }
+  } else {
+    return;
+  }
+
+  panel.innerHTML = `
+    <div class="table-card">
+      <div class="table-toolbar">
+        <h2>${title}</h2>
+        <div class="controls">
+          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnPostureDetailClose">✕ Close</span>
+        </div>
+      </div>
+      ${tableHtml}
+    </div>`;
+  panel.style.display = '';
+  const closeBtn = $('btnPostureDetailClose');
+  if (closeBtn) {
+    closeBtn.onclick = () => {
+      panel.style.display = 'none';
+      panel.innerHTML = '';
+      postureTileFilter = null;
+      syncPostureTileUi();
+    };
+  }
+}
+
+function exportPostureCsv(section) {
+  const lines = [];
+  if (section === 'compliance' && postureComp) {
+    lines.push(['Section', 'Item', 'Platform', 'Detail', 'LastModified'].join(','));
+    if (postureComp.unsafeDefault) {
+      lines.push(['UnsafeDefault', 'secureByDefault=false', '', 'no policy = compliant', ''].map(escCsv).join(','));
+    }
+    for (const r of postureComp.noGrace) {
+      lines.push(['NoGrace', r.name, r.platform, 'gracePeriodHours=0', r.lastModified].map(escCsv).join(','));
+    }
+    for (const r of postureComp.deviceTargeted) {
+      lines.push(['DeviceTargeted', r.name, r.platform, r.targets, r.lastModified].map(escCsv).join(','));
+    }
+    for (const r of postureComp.noPlatformSplit) {
+      lines.push(['NoPlatformSplit', r.name, r.platform, r.reason, r.lastModified].map(escCsv).join(','));
+    }
+  } else if (section === 'ca' && postureCa) {
+    lines.push(['Section', 'Item', 'Detail', 'LastModified'].join(','));
+    for (const r of postureCa.reportOnlyStale) {
+      lines.push(['ReportOnlyStale', r.name, `ageDays=${r.ageDays}`, r.modified].map(escCsv).join(','));
+    }
+    for (const r of postureCa.compliantGap) {
+      lines.push(['CompliantDeviceGap', r.name, r.grants, r.modified].map(escCsv).join(','));
+    }
+    if (postureCa.legacyAuthNotBlocked) {
+      lines.push(['LegacyAuth', '(none blocking)', 'exchangeActiveSync+other not blocked', ''].map(escCsv).join(','));
+    } else {
+      for (const r of postureCa.legacyBlockers) {
+        lines.push(['LegacyAuthBlockedBy', r.name, r.state, r.modified].map(escCsv).join(','));
+      }
+    }
+  } else {
+    return;
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `posture-${section}-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+async function loadPosture(force = false) {
+  if (postureLoading) return;
+  if (postureLoaded && !force) return;
+  postureLoading = true;
+  $('postureLoading').style.display = '';
+  $('postureError').innerHTML = '';
+  try {
+    postureComp = await loadPostureCompliance();
+    $('btnPostureExportComp').style.display = '';
+    postureCaGranted = await hasPolicyReadAll();
+    if (postureCaGranted) {
+      $('postureCaNeedScope').style.display = 'none';
+      $('postureCaBody').style.display = '';
+      try {
+        postureCa = await loadPostureCa();
+        $('btnPostureExportCa').style.display = '';
+      } catch (e) {
+        postureCa = null;
+        $('postureCaBody').style.display = 'none';
+        $('postureCaNeedScope').style.display = '';
+        $('postureCaNeedScope').innerHTML = `<strong>Conditional Access load failed:</strong> ${esc(e.message || String(e))}
+          <div style="margin-top:10px;"><button class="btn" id="btnPostureGrantCa">Retry / Grant Policy.Read.All</button></div>`;
+        $('btnPostureGrantCa').onclick = grantPostureCaScope;
+        postureCaGranted = false;
+      }
+    } else {
+      postureCa = null;
+      $('postureCaBody').style.display = 'none';
+      $('postureCaNeedScope').style.display = '';
+      $('postureCaNeedScope').innerHTML = `<strong>Grant <code>Policy.Read.All</code> to audit CA posture.</strong>
+        Compliance above still works without it. This scope is optional and requested only when you click Grant.
+        <div style="margin-top:10px;"><button class="btn" id="btnPostureGrantCa">Grant Policy.Read.All</button></div>`;
+      $('btnPostureGrantCa').onclick = grantPostureCaScope;
+      $('btnPostureExportCa').style.display = 'none';
+    }
+    postureLoaded = true;
+    renderPostureTiles();
+    if (postureTileFilter) renderPostureDetail(postureTileFilter);
+  } catch (e) {
+    console.error('Posture load failed', e);
+    $('postureError').innerHTML = `<div class="error-banner">Failed to load posture: ${esc(e.message || String(e))}</div>`;
+    postureLoaded = false;
+  } finally {
+    postureLoading = false;
+    $('postureLoading').style.display = 'none';
+  }
+}
+
+async function grantPostureCaScope() {
+  try {
+    await ensureScopeToken(POLICY_READ_ALL);
+    postureCaGranted = true;
+    postureLoaded = false;
+    await loadPosture(true);
+  } catch (e) {
+    $('postureError').innerHTML = `<div class="error-banner">Could not get Policy.Read.All: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+$('btnPostureRefresh').addEventListener('click', () => { postureLoaded = false; loadPosture(true); });
+$('btnPostureExportComp').addEventListener('click', () => exportPostureCsv('compliance'));
+$('btnPostureExportCa').addEventListener('click', () => exportPostureCsv('ca'));
+$('btnPostureClearKpi').addEventListener('click', () => {
+  postureTileFilter = null;
+  $('postureCompDetail').style.display = 'none';
+  $('postureCompDetail').innerHTML = '';
+  $('postureCaDetail').style.display = 'none';
+  $('postureCaDetail').innerHTML = '';
+  syncPostureTileUi();
+});
+document.querySelectorAll('#intuneSubPosture [data-posture-tile]').forEach(tile => {
+  tile.addEventListener('click', () => {
+    const key = tile.dataset.postureTile;
+    if (postureTileFilter === key) {
+      postureTileFilter = null;
+      $('postureCompDetail').style.display = 'none';
+      $('postureCaDetail').style.display = 'none';
+      syncPostureTileUi();
+      return;
+    }
+    postureTileFilter = key;
+    syncPostureTileUi();
+    renderPostureDetail(key);
+  });
+});
+
+let uploadedLogs = [];
+
+$('copyLogPath').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(IME_LOG_PATH);
+    $('copyLogPath').textContent = 'Copied!';
+    setTimeout(() => $('copyLogPath').textContent = 'Copy path', 1500);
+  } catch {}
+});
+
+$('copyPs').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText($('psSnippet').textContent);
+    $('copyPs').textContent = 'Copied!';
+    setTimeout(() => $('copyPs').textContent = 'Copy', 1500);
+  } catch {}
+});
+
+$('logDropZone').addEventListener('click', () => $('logFiles').click());
+$('logDropZone').addEventListener('dragover', e => {
+  e.preventDefault();
+  $('logDropZone').style.borderColor = 'var(--accent)';
+  $('logDropZone').style.background = 'var(--accent-soft)';
+});
+$('logDropZone').addEventListener('dragleave', () => {
+  $('logDropZone').style.borderColor = '';
+  $('logDropZone').style.background = '';
+});
+$('logDropZone').addEventListener('drop', e => {
+  e.preventDefault();
+  $('logDropZone').style.borderColor = '';
+  $('logDropZone').style.background = '';
+  handleLogFiles(e.dataTransfer.files);
+});
+$('logFiles').addEventListener('change', e => handleLogFiles(e.target.files));
+
+async function handleLogFiles(fileList) {
+  const files = Array.from(fileList);
+  if (!files.length) return;
+  uploadedLogs = [];
+  for (const f of files) {
+    const content = await f.text();
+    uploadedLogs.push({ name: f.name, size: f.size, content });
+  }
+  renderLogFileList();
+  $('btnAnalyzeLogs').disabled = false;
+  $('logStatus').textContent = '';
+}
+
+function renderLogFileList() {
+  if (!uploadedLogs.length) {
+    $('logFileList').style.display = 'none';
+    return;
+  }
+  $('logFileList').style.display = '';
+  $('logFileList').innerHTML = uploadedLogs.map((f, i) => `
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--card); border:1px solid var(--line); border-radius:8px; margin-bottom:6px;">
+      <div style="font-family:ui-monospace,monospace; font-size:12px;">${esc(f.name)}</div>
+      <div style="display:flex; gap:12px; align-items:center;">
+        <span style="font-size:11px; color:var(--muted);">${(f.size / 1024).toFixed(1)} KB</span>
+        <button class="btn btn-ghost" style="font-size:11px; padding:2px 8px;" onclick="removeLog(${i})">Remove</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+window.removeLog = function(i) {
+  uploadedLogs.splice(i, 1);
+  renderLogFileList();
+  $('btnAnalyzeLogs').disabled = uploadedLogs.length === 0;
+};
+
+// Trim log to error-adjacent lines: grep for error/fail/return-value patterns,
+// keep ±N lines of context around each match. Deduplicate overlapping windows.
+// Decimal error codes must be negative (-2016281112) or carry an HRESULT
+// prefix (214…/322… = 0x8…/0xC…) — a bare \d{7,10} would match the
+// fractional seconds in every CMTrace timestamp and keep the whole file.
+function trimLog(content, context = 15) {
+  const lines = content.split(/\r?\n/);
+  const pattern = /\b(error|fail(ed|ure)?|exception|return value [^0-2]|0x[0-9a-f]{8}|cannot|denied|timeout|abort)\b|-\d{7,10}\b|\b(214|322)\d{7}\b/i;
+  const keep = new Set();
+  lines.forEach((line, i) => {
+    if (pattern.test(line)) {
+      for (let j = Math.max(0, i - context); j <= Math.min(lines.length - 1, i + context); j++) {
+        keep.add(j);
+      }
+    }
+  });
+  if (keep.size === 0) {
+    // No matches — keep last 200 lines as fallback
+    const start = Math.max(0, lines.length - 200);
+    return lines.slice(start).join('\n');
+  }
+  const sorted = [...keep].sort((a, b) => a - b);
+  const out = [];
+  let prev = -2;
+  for (const idx of sorted) {
+    if (idx > prev + 1) out.push(`... [${idx - prev - 1} lines skipped] ...`);
+    out.push(lines[idx]);
+    prev = idx;
+  }
+  return out.join('\n');
+}
+
+$('btnAnalyzeLogs').addEventListener('click', analyzeLogs);
+
+// Assemble all uploaded logs into one block under a hard char budget.
+// Escalation per file: normal trim → tight trim (±3 lines) → keep the tail
+// (the failure being investigated is almost always the most recent activity).
+function buildLogPayload(charBudget, autoTrim) {
+  const perFileBudget = Math.floor(charBudget / uploadedLogs.length);
+  let truncated = false;
+  const processed = uploadedLogs.map(f => {
+    let body = autoTrim ? trimLog(f.content) : f.content;
+    let note = autoTrim ? 'trimmed' : 'full';
+    if (autoTrim && body.length > perFileBudget) {
+      body = trimLog(f.content, 3);
+      note = 'trimmed tight';
+    }
+    if (body.length > perFileBudget) {
+      body = body.slice(-perFileBudget);
+      body = body.slice(body.indexOf('\n') + 1);
+      note += ', oldest entries dropped to fit the model context — newest kept';
+      truncated = true;
+    }
+    return `=== ${f.name} (${note}, ${body.length} chars) ===\n${body}`;
+  }).join('\n\n');
+  return { processed, truncated };
+}
+
+async function analyzeLogs() {
+  persistLlmSettings({ announce: false });
+  const { apiKey, model, provider, brand } = getActiveLlm();
+  if (!apiKey) {
+    if (brand === 'Grok') {
+      $('logStatus').textContent = 'Add your xAI API key in Settings first.';
+      showXaiKeyHelp();
+    } else {
+      $('logStatus').textContent = 'Add your Claude API key in Settings first.';
+    }
+    return;
+  }
+  if (provider !== 'xai' && looksLikeTwitterDevKey(apiKey)) {
+    $('logStatus').textContent = 'Use an xAI key from console.x.ai — not Twitter developer.x.com.';
+    showXaiKeyHelp();
+    return;
+  }
+  if (!uploadedLogs.length) return;
+
+  const activeModel = model;
+  const autoTrim = $('logAutoTrim').checked;
+
+  // The API rejects prompts over 200k tokens. Dense logs (CMTrace, PSADT)
+  // tokenize at ~2.5–2.7 chars/token, so 400k chars ≈ 150–160k tokens.
+  // If the estimate is still off, the catch below reads the real token count
+  // from the API error and retries once with a corrected budget.
+  const CHAR_BUDGET = 400000;
+  let { processed, truncated } = buildLogPayload(CHAR_BUDGET, autoTrim);
+
+  const approxTokens = Math.ceil(processed.length / 4);
+  $('btnAnalyzeLogs').disabled = true;
+  $('logStatus').textContent = `Sending ${(processed.length / 1024).toFixed(1)} KB (~${approxTokens.toLocaleString()} tokens) to ${activeModel}…`
+    + (truncated ? ' Log exceeded the model context — oldest entries were dropped, newest kept.' : '');
+  $('logAnalysisResult').style.display = '';
+  $('logAnalysisResult').innerHTML = `<div style="color:var(--muted); font-size:13px;">Analyzing with ${brand}…</div>`;
+
+  const buildPrompt = logs => `You are an Intune/MEM expert analyzing log files from a Windows endpoint. The user is an experienced Intune administrator troubleshooting an app install failure.
+
+Log files provided:
+${logs}
+
+Analyze the logs and produce a focused diagnosis. Format:
+
+1. **Failure summary** — what failed, when, on which component (IME, AgentExecutor, MSI, etc.)
+2. **Root cause** — the actual underlying cause based on log evidence (cite specific log lines/timestamps)
+3. **Remediation** — concrete steps the admin should take, in priority order
+4. **Additional signals** — secondary issues or warnings worth noting (optional, skip if none)
+
+Be technical and specific. Assume the reader knows Intune internals. No preamble, no generic advice.`;
+
+  try {
+    let result;
+    try {
+      result = await callModel({ apiKey, model: activeModel, maxTokens: 2048, prompt: buildPrompt(processed), provider });
+    } catch (e) {
+      // "prompt is too long: N tokens > M maximum" — our chars/token estimate
+      // was too optimistic for this log. Use the API's actual count to compute
+      // the real density and retry once with a budget that must fit.
+      const m = /prompt is too long: (\d+) tokens > (\d+) maximum/.exec(e.message);
+      if (!m) throw e;
+      const charsPerToken = processed.length / Number(m[1]);
+      const retryBudget = Math.floor(Number(m[2]) * 0.9 * charsPerToken);
+      ({ processed, truncated } = buildLogPayload(retryBudget, autoTrim));
+      $('logStatus').textContent = `Log denser than estimated — retrying with ${(processed.length / 1024).toFixed(1)} KB…`;
+      result = await callModel({ apiKey, model: activeModel, maxTokens: 2048, prompt: buildPrompt(processed), provider });
+    }
+    const { text, inputTokens, outputTokens } = result;
+    trackUsage(activeModel, inputTokens, outputTokens);
+    const html = esc(text)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n/g, '<br>');
+    $('logAnalysisResult').innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid var(--line);">
+        <div style="font-weight:600; font-size:13px;">Analysis · ${esc(activeModel)}</div>
+        <div style="font-size:11px; color:var(--muted);">${inputTokens || '?'} in · ${outputTokens || '?'} out · ${estimateCost(activeModel, inputTokens, outputTokens)}</div>
+      </div>
+      <div style="line-height:1.6; font-size:13px;">${html}</div>`;
+    $('logStatus').textContent = '';
+  } catch (e) {
+    $('logAnalysisResult').innerHTML = `<div style="color:var(--accent);">Analysis failed: ${esc(e.message)}</div>`;
+    $('logStatus').textContent = '';
+  } finally {
+    $('btnAnalyzeLogs').disabled = false;
+  }
+}
+
+// ============================================================
+// Stale users (P1) sub-tab — Entra MEMBER accounts that are
+// inactive or never signed in. License-reclaim / identity hygiene
+// view. List uses User.Read.All + AuditLog.Read.All (in SCOPES).
+// signInActivity is gated behind Entra ID P1/P2 — if the property
+// is absent on every in-scope user we render a P1/P2-required
+// empty state, mirroring the Defender (P2/E5) tabs.
+// Revoke / Disable actions request User.RevokeSessions.All and
+// User.EnableDisableAccount.All just-in-time on first click —
+// list-only viewers are never prompted for write scopes.
+// Bulk action intentionally deferred — per-row only matches the
+// existing JIT pattern (Restore in Soft-deleted, Delete in Installed).
+// ============================================================
+let staleusersLoaded = false;
+let staleusersLoading = false;
+let staleusersRows = [];
+let staleusersSortKey = 'default';  // 'default' = never-first, then daysIdle desc
+let staleusersSortDir = 'desc';
+let staleusersTileFilter = null;  // null | 'idle' | 'never' | 'licensedStale'
+let staleusersP1Gated = false;
+
+function entraUserUrl(id) {
+  return `https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/overview/userId/${encodeURIComponent(id)}`;
+}
+
+async function loadStaleUsers(force = false) {
+  if (staleusersLoading) return;
+  if (staleusersLoaded && !force) return;
+  staleusersLoading = true;
+  staleusersLoaded = true;
+  staleusersP1Gated = false;
+  $('staleusersLoading').style.display = '';
+  $('staleusersContent').style.display = 'none';
+  $('staleusersError').innerHTML = '';
+  $('staleusersNotice').innerHTML = '';
+  try {
+    const select = encodeURIComponent('id,displayName,userPrincipalName,accountEnabled,userType,signInActivity,assignedLicenses');
+    const all = await graphGetAll(`v1.0/users?$select=${select}&$top=999`);
+    const now = Date.now();
+    const scoped = all.filter(u => u.userType === 'Member' && u.accountEnabled === true);
+    // P1/P2 gate: without Entra ID P1/P2, Graph omits the signInActivity
+    // property entirely on every user. If we have in-scope members and not
+    // a single one has the property, treat it as P1-gated.
+    const anyHasSignInProp = scoped.some(u => u.signInActivity !== undefined);
+    if (scoped.length && !anyHasSignInProp) staleusersP1Gated = true;
+
+    staleusersRows = scoped.map(u => {
+      const sa = u.signInActivity || {};
+      const candidates = [sa.lastSignInDateTime, sa.lastNonInteractiveSignInDateTime, sa.lastSuccessfulSignInDateTime]
+        .filter(Boolean).map(s => Date.parse(s)).filter(t => !Number.isNaN(t));
+      const lastMs = candidates.length ? Math.max(...candidates) : null;
+      const neverSignedIn = lastMs === null;
+      const daysIdle = lastMs == null ? null : Math.floor((now - lastMs) / 86400000);
+      return {
+        id: u.id,
+        displayName: u.displayName || '',
+        userPrincipalName: u.userPrincipalName || '',
+        licenseCount: (u.assignedLicenses || []).length,
+        lastActivityAt: lastMs == null ? '' : new Date(lastMs).toISOString(),
+        lastActivityMs: lastMs,
+        neverSignedIn,
+        daysIdle,
+        accountEnabled: true,
+        actionStatus: null
+      };
+    });
+
+    $('staleusersLoading').style.display = 'none';
+    if (staleusersP1Gated) {
+      $('staleusersError').innerHTML = `<div class="error-banner">⚠ <strong>Entra ID P1/P2 required.</strong> The <code>signInActivity</code> property was absent on every in-scope user, which means this tenant isn't licensed for Entra ID P1 or P2. Without that property the dashboard can't compute idle days. The "(P1)" suffix in the tab label is the reminder.</div>`;
+      return;
+    }
+    $('staleusersContent').style.display = '';
+    renderStaleUsers();
+  } catch (e) {
+    staleusersLoaded = false;
+    $('staleusersLoading').style.display = 'none';
+    if (e.status === 403) {
+      $('staleusersError').innerHTML = `<div class="error-banner">⚠ <strong>403 from Graph.</strong> ${esc(e.message || String(e))}<br>Likely causes: the tenant isn't licensed for Entra ID P1/P2 (required for <code>signInActivity</code>), or admin consent for <code>User.Read.All</code> / <code>AuditLog.Read.All</code> hasn't been granted yet — sign out and back in to re-consent.</div>`;
+    } else {
+      console.error('Stale users load failed', e);
+      $('staleusersError').innerHTML = `<div class="error-banner">Failed to load members: ${esc(e.message || String(e))}</div>`;
+    }
+  } finally {
+    staleusersLoading = false;
+  }
+}
+
+function staleStatusOf(r) {
+  if (!r.accountEnabled) return 'disabled';
+  if (r.neverSignedIn) return 'never';
+  const threshold = +$('staleusersThreshold').value || 90;
+  if (r.daysIdle != null && r.daysIdle >= threshold) return 'idle';
+  return 'active';
+}
+
+function staleStatusBadge(r) {
+  const state = staleStatusOf(r);
+  const map = {
+    active:   { label: 'Active',   bg: '#e7f6ec', border: '#a7d7b5', color: '#1f5d33' },
+    idle:     { label: 'Stale',    bg: '#fff0db', border: '#f0c890', color: '#7a4500' },
+    never:    { label: 'Never',    bg: '#fff8d6', border: '#f0d090', color: '#6a5314' },
+    disabled: { label: 'Disabled', bg: '#fdecec', border: '#f5b5b5', color: '#8a2020' }
+  };
+  const m = map[state];
+  return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:${m.bg}; border:1px solid ${m.border}; color:${m.color};">${esc(m.label)}</span>`;
+}
+
+function staleSigninBadge(r) {
+  if (r.neverSignedIn) {
+    return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:#fff8d6; border:1px solid #f0d090; color:#6a5314;">Never</span>`;
+  }
+  return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:#eaf6ee; border:1px solid #a7d7b5; color:#1f5d33;">Active record</span>`;
+}
+
+function applyStaleFilters(rows) {
+  const q = ($('staleusersFilter').value || '').toLowerCase().trim();
+  const includeNever = $('staleusersIncludeNever').checked;
+  const threshold = +$('staleusersThreshold').value || 90;
+  const tile = staleusersTileFilter;
+  return rows.filter(r => {
+    if (!includeNever && r.neverSignedIn) return false;
+    if (tile === 'idle' && !(r.daysIdle != null && r.daysIdle >= threshold)) return false;
+    if (tile === 'never' && !r.neverSignedIn) return false;
+    if (tile === 'licensedStale') {
+      const stale = r.neverSignedIn || (r.daysIdle != null && r.daysIdle >= threshold);
+      if (!(r.licenseCount > 0 && stale)) return false;
+    }
+    if (q) {
+      const hay = (r.displayName + ' ' + r.userPrincipalName).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function renderStaleUsersTiles() {
+  const threshold = +$('staleusersThreshold').value || 90;
+  $('suTileIdleLabel').textContent = threshold + '+';
+  let total = 0, idle = 0, never = 0, licensedStale = 0;
+  for (const r of staleusersRows) {
+    total++;
+    if (r.neverSignedIn) never++;
+    if (r.daysIdle != null && r.daysIdle >= threshold) idle++;
+    const stale = r.neverSignedIn || (r.daysIdle != null && r.daysIdle >= threshold);
+    if (r.licenseCount > 0 && stale) licensedStale++;
+  }
+  $('suTileTotal').textContent = total;
+  $('suTileIdle').textContent = idle;
+  $('suTileNever').textContent = never;
+  $('suTileLicensedStale').textContent = licensedStale;
+  syncStaleusersTileUi();
+}
+
+function syncStaleusersTileUi() {
+  const map = { suTileTotal: '', suTileIdle: 'idle', suTileNever: 'never', suTileLicensedStale: 'licensedStale' };
+  Object.keys(map).forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    const tile = el.closest('.tile');
+    if (!tile) return;
+    tile.classList.toggle('active', map[id] !== '' && staleusersTileFilter === map[id]);
+  });
+  const searchActive = !!($('staleusersFilter').value || '').trim();
+  $('btnStaleusersClearKpi').style.display = (staleusersTileFilter || searchActive) ? '' : 'none';
+}
+
+function renderStaleUsers() {
+  renderStaleUsersTiles();
+  let rows = applyStaleFilters(staleusersRows);
+  const dir = staleusersSortDir === 'asc' ? 1 : -1;
+  rows.sort((a, b) => {
+    if (staleusersSortKey === 'default') {
+      // Never first, then days-idle desc, with null-activity treated as worst
+      if (a.neverSignedIn !== b.neverSignedIn) return a.neverSignedIn ? -1 : 1;
+      const ad = a.daysIdle == null ? -1 : a.daysIdle;
+      const bd = b.daysIdle == null ? -1 : b.daysIdle;
+      if (bd !== ad) return bd - ad;
+      return (a.displayName || '').toLowerCase().localeCompare((b.displayName || '').toLowerCase());
+    }
+    let av, bv;
+    if (staleusersSortKey === 'status') { av = staleStatusOf(a); bv = staleStatusOf(b); }
+    else if (staleusersSortKey === 'signinBadge') { av = a.neverSignedIn ? 0 : 1; bv = b.neverSignedIn ? 0 : 1; }
+    else { av = a[staleusersSortKey]; bv = b[staleusersSortKey]; }
+    if (av == null) av = dir > 0 ? Infinity : -Infinity;
+    if (bv == null) bv = dir > 0 ? Infinity : -Infinity;
+    if (typeof av === 'string') { av = av.toLowerCase(); bv = (bv || '').toString().toLowerCase(); }
+    if (av < bv) return -dir;
+    if (av > bv) return dir;
+    return (a.displayName || '').toLowerCase().localeCompare((b.displayName || '').toLowerCase());
+  });
+
+  const body = $('staleusersRows');
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--muted); padding:24px;">No members match the current filters.</td></tr>`;
+  } else {
+    body.innerHTML = rows.map(r => {
+      const nameCell = `<a href="${entraUserUrl(r.id)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">${esc(r.displayName) || '—'}</a>`;
+      const lastCell = r.lastActivityMs == null ? '—' : new Date(r.lastActivityMs).toLocaleDateString();
+      const idleCell = r.neverSignedIn ? '—' : (r.daysIdle != null ? r.daysIdle : '—');
+      const licensedCell = r.licenseCount > 0
+        ? `<span style="font-weight:600; color:var(--ink);">${r.licenseCount}</span>`
+        : `<span style="color:var(--muted);">0</span>`;
+      let actionsHtml;
+      if (r.actionStatus) {
+        actionsHtml = r.actionStatus.kind === 'ok'
+          ? `<span style="color:#1f5d33; font-weight:600; font-size:11px;">✓ ${esc(r.actionStatus.msg)}</span>`
+          : `<span style="color:#8a2020; font-weight:600; font-size:11px;">✗ ${esc(r.actionStatus.msg)}</span>`;
+      } else if (!r.accountEnabled) {
+        actionsHtml = `<span style="color:var(--muted); font-size:11px;">—</span>`;
+      } else {
+        actionsHtml = `<button class="btn btn-ghost" data-su-revoke="${esc(r.id)}" data-su-name="${esc(r.displayName)}" data-su-upn="${esc(r.userPrincipalName)}" title="Invalidate refresh tokens — forces re-auth">↻ Revoke</button>
+           <button class="btn btn-ghost" data-su-disable="${esc(r.id)}" data-su-name="${esc(r.displayName)}" data-su-upn="${esc(r.userPrincipalName)}" title="Block sign-in (sets accountEnabled=false)" style="margin-left:4px;">⊘ Disable</button>`;
+      }
+      return `<tr>
+        <td>${nameCell}</td>
+        <td>${esc(r.userPrincipalName) || '—'}</td>
+        <td class="date">${lastCell}</td>
+        <td>${idleCell}</td>
+        <td>${staleSigninBadge(r)}</td>
+        <td>${licensedCell}</td>
+        <td>${staleStatusBadge(r)}</td>
+        <td style="white-space:nowrap;">${actionsHtml}</td>
+      </tr>`;
+    }).join('');
+    body.querySelectorAll('[data-su-revoke]').forEach(btn => {
+      btn.addEventListener('click', () => openStaleActionModal('revoke', btn.dataset.suRevoke, btn.dataset.suName, btn.dataset.suUpn));
+    });
+    body.querySelectorAll('[data-su-disable]').forEach(btn => {
+      btn.addEventListener('click', () => openStaleActionModal('disable', btn.dataset.suDisable, btn.dataset.suName, btn.dataset.suUpn));
+    });
+  }
+  $('staleusersCount').textContent = rows.length;
+}
+
+function exportStaleUsersCsv() {
+  const rows = applyStaleFilters(staleusersRows);
+  const header = ['DisplayName','UPN','LastActivity','DaysIdle','NeverSignedIn','LicenseCount','AccountEnabled'];
+  const lines = [header.join(',')].concat(rows.map(r => [
+    r.displayName,
+    r.userPrincipalName,
+    r.lastActivityAt,
+    r.daysIdle == null ? '' : r.daysIdle,
+    r.neverSignedIn ? 'true' : 'false',
+    r.licenseCount,
+    r.accountEnabled ? 'true' : 'false'
+  ].map(escCsv).join(',')));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `stale-users-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Per-scope JIT consent for the stale-users write actions.
+function ensureUserWriteConsent(writeScope) {
+  return ensureScopeToken(writeScope);
+}
+
+async function revokeUserSessions(id) {
+  const token = await ensureUserWriteConsent('User.RevokeSessions.All');
+  const res = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(id)}/revokeSignInSessions`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    const err = new Error('Graph ' + res.status + ': ' + body);
+    err.status = res.status;
+    throw err;
+  }
+}
+
+async function disableUser(id) {
+  const token = await ensureUserWriteConsent('User.EnableDisableAccount.All');
+  const res = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ accountEnabled: false })
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    const err = new Error('Graph ' + res.status + ': ' + body);
+    err.status = res.status;
+    throw err;
+  }
+}
+
+function openStaleActionModal(kind, id, name, upn) {
+  $('suActionTitle').textContent = kind === 'revoke' ? 'Revoke sign-in sessions' : 'Disable account';
+  $('suActionSubtitle').textContent = upn || name || '';
+  const effectHtml = kind === 'revoke'
+    ? `<p style="margin-top:0;">This invalidates <strong>${esc(name) || 'the user'}</strong>'s refresh tokens and forces them to re-authenticate. Live access tokens remain valid for up to ~1 hour unless the resource enforces Continuous Access Evaluation (CAE).</p>
+       <p>Scope requested just-in-time: <code>User.RevokeSessions.All</code>.</p>`
+    : `<p style="margin-top:0;">This sets <code>accountEnabled=false</code> on <strong>${esc(name) || 'the user'}</strong>, blocking new sign-ins. Live access tokens remain valid for up to ~1 hour unless the resource enforces Continuous Access Evaluation (CAE). Existing data, licenses, and group memberships are preserved.</p>
+       <p>Scope requested just-in-time: <code>User.EnableDisableAccount.All</code>.</p>
+       <p style="margin-bottom:6px;">To confirm, type <code>DISABLE</code>:</p>`;
+  const needsTyped = kind === 'disable';
+  const buttonClass = kind === 'revoke' ? 'btn' : 'btn btn-danger';
+  const buttonLabel = kind === 'revoke' ? 'Revoke sessions' : 'Disable account';
+  $('suActionBody').innerHTML = `
+    ${effectHtml}
+    ${needsTyped ? `<input type="text" id="suActionConfirm" class="search" placeholder="Type DISABLE to confirm" autocomplete="off" style="width:100%; margin-bottom:16px;">` : ''}
+    <div id="suActionError"></div>
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button class="btn btn-ghost" onclick="closeStaleActionModal()">Cancel</button>
+      <button class="${buttonClass}" id="suActionConfirmBtn" ${needsTyped ? 'disabled' : ''}>${buttonLabel}</button>
+    </div>
+  `;
+  if (needsTyped) {
+    const input = $('suActionConfirm');
+    const btn = $('suActionConfirmBtn');
+    input.addEventListener('input', () => { btn.disabled = input.value !== 'DISABLE'; });
+    attachSearchClearButtons($('suActionBody'));
+    setTimeout(() => input.focus(), 0);
+  }
+  $('suActionConfirmBtn').addEventListener('click', () => runStaleAction(kind, id, name));
+  $('staleActionModal').classList.add('show');
+}
+
+function closeStaleActionModal() {
+  $('staleActionModal').classList.remove('show');
+}
+
+async function runStaleAction(kind, id, name) {
+  const btn = $('suActionConfirmBtn');
+  const errBox = $('suActionError');
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Consent…';
+  try {
+    if (kind === 'revoke') await revokeUserSessions(id);
+    else await disableUser(id);
+    const row = staleusersRows.find(r => r.id === id);
+    if (row) {
+      row.actionStatus = { kind: 'ok', msg: kind === 'revoke' ? 'Sessions revoked' : 'Disabled' };
+      if (kind === 'disable') row.accountEnabled = false;
+    }
+    closeStaleActionModal();
+    renderStaleUsers();
+    $('staleusersNotice').innerHTML = `<div class="notice-banner">✓ ${kind === 'revoke' ? 'Revoked sessions for' : 'Disabled'} <strong>${esc(name)}</strong>.</div>`;
+    setTimeout(() => { const n = $('staleusersNotice'); if (n) n.innerHTML = ''; }, 8000);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+    errBox.innerHTML = `<div class="error-banner" style="margin-bottom:12px;">${esc(e.message || String(e))}</div>`;
+    const row = staleusersRows.find(r => r.id === id);
+    if (row) row.actionStatus = { kind: 'err', msg: 'Failed' };
+  }
+}
+
+// Wire controls
+$('staleusersFilter').addEventListener('input', renderStaleUsers);
+$('staleusersThreshold').addEventListener('change', renderStaleUsers);
+$('staleusersIncludeNever').addEventListener('change', renderStaleUsers);
+$('btnStaleusersRefresh').addEventListener('click', () => loadStaleUsers(true));
+$('btnStaleusersExport').addEventListener('click', exportStaleUsersCsv);
+$('btnStaleusersClearKpi').addEventListener('click', () => {
+  staleusersTileFilter = null;
+  $('staleusersFilter').value = '';
+  $('staleusersFilter').dispatchEvent(new Event('input', { bubbles: true }));
+  renderStaleUsers();
+});
+document.querySelectorAll('#intuneSubStaleusers [data-su-tile]').forEach(tile => {
+  tile.addEventListener('click', () => {
+    const target = tile.dataset.suTile;
+    // Toggle off when re-clicking the active tile; '' (Members in scope) always clears.
+    if (target === '') {
+      staleusersTileFilter = null;
+    } else {
+      staleusersTileFilter = staleusersTileFilter === target ? null : target;
+    }
+    renderStaleUsers();
+  });
+});
+document.querySelectorAll('#intuneSubStaleusers th[data-su-sort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.suSort;
+    if (staleusersSortKey === key) staleusersSortDir = staleusersSortDir === 'asc' ? 'desc' : 'asc';
+    else { staleusersSortKey = key; staleusersSortDir = 'asc'; }
+    renderStaleUsers();
+  });
+});
+$('staleActionModal').addEventListener('click', e => { if (e.target === $('staleActionModal')) closeStaleActionModal(); });
+
+// ============================================================
+// AI agents (P2/E5) sub-tab — locally installed AI agents
+// discovered by Defender for Endpoint agent discovery (preview).
+// Detection logic adapted from SlimKQL/Detections.AI (agent-365--
+// local-ai-agent-installation-detection.kql); the original alerts
+// on a 24h window, the dashboard shows the full inventory and
+// surfaces "new in 7 days" as the warn tile instead.
+// The preview's hunting surface is in flux, so the load cascades
+// through three sources and reports which one answered:
+//   1. AgentsInfo   — the table replacing AIAgentsInfo (the old
+//      name stops resolving July 1, 2026)
+//   2. AIAgentsInfo — SlimKQL's original table, kept while it lasts
+//   3. ExposureGraphEdges (endpointAiAgent → "runs on" → device) —
+//      Microsoft's documented home for endpoint agent discovery;
+//      gives agent+device only, so vendor / user / install-time
+//      columns render "—" and the New (7d) tile is unavailable.
+// A 400 from a source means "table/column doesn't exist here" —
+// fall through to the next; anything else (403 role errors etc.)
+// bubbles to the shared banners.
+// A second, individually-caught query (DeviceInfo, last 7d) feeds
+// the fleet-footprint gauge; if it fails the gauge just shows an
+// em-dash and the tab still works.
+// Requires ThreatHunting.Read.All (already in SCOPES) plus a
+// Defender security role on the signed-in user.
+// ============================================================
+let aiagentsLoaded = false;
+let aiagentsLoading = false;
+let aiagentsRows = [];
+let aiagentsSource = null;       // 'AgentsInfo' | 'AIAgentsInfo' | 'ExposureGraph' | null
+let aiagentsChecked = [];        // per-source outcomes from the last load, for the empty-state banner
+let aiagentsFleetTotal = null;   // dcount(DeviceId) from DeviceInfo, null = unavailable
+let aiagentsSortKey = 'detectedAtMs';
+let aiagentsSortDir = 'desc';
+let aiagentsTileFilter = null;   // null | 'new'
+
+const AI_NEW_WINDOW_MS = 7 * 86400000;
+
+const localAgentsKql = table => `
+${table}
+| where Platform == @"LocalAgents"
+| extend Raw = parse_json(RawAgentInfo)
+| project AgentName = tostring(Raw.name),
+          Vendor = tostring(Raw.localAgentMetadata.vendor),
+          DeviceName = tostring(Raw.localAgentMetadata.deviceName),
+          OSPlatform = tostring(Raw.localAgentMetadata.osPlatform),
+          UserName = tostring(Raw.localAgentMetadata.accountName),
+          DetectedAt = AgentCreationTime
+| order by DetectedAt desc
+`;
+
+const AIAGENTS_GRAPH_KQL = `
+ExposureGraphEdges
+| where SourceNodeLabel == "endpointAiAgent" and EdgeLabel =~ "runs on"
+| project AgentName = SourceNodeName, DeviceName = TargetNodeName
+| distinct AgentName, DeviceName
+`;
+
+const AIAGENTS_FLEET_KQL = `
+DeviceInfo
+| where Timestamp > ago(7d)
+| summarize Total = dcount(DeviceId)
+`;
+
+// Walk the sources in order; return rows from the first one that
+// resolves AND has data. Every source's outcome is recorded —
+// "absent" (400, table not in tenant) vs a row count — so the
+// empty state can say exactly which claim failed instead of a
+// vague "no data".
+async function queryLocalAgents() {
+  const checked = [];  // { source, outcome: 'absent' | number }
+  for (const table of ['AgentsInfo', 'AIAgentsInfo']) {
+    try {
+      const json = await graphPost('v1.0/security/runHuntingQuery', { Query: localAgentsKql(table) });
+      const results = Array.isArray(json.results) ? json.results : [];
+      const rows = results.map(r => {
+        const ms = r.DetectedAt ? Date.parse(r.DetectedAt) : NaN;
+        return {
+          agentName: r.AgentName || '',
+          vendor: r.Vendor || '',
+          deviceName: r.DeviceName || '',
+          osPlatform: r.OSPlatform || '',
+          userName: r.UserName || '',
+          detectedAtMs: Number.isNaN(ms) ? null : ms
+        };
+      });
+      checked.push({ source: table, outcome: rows.length });
+      if (rows.length) return { rows, source: table, checked };
+    } catch (e) {
+      if (e.status !== 400) throw e;  // 403 role errors etc. — surface them
+      checked.push({ source: table, outcome: 'absent' });
+    }
+  }
+  try {
+    const json = await graphPost('v1.0/security/runHuntingQuery', { Query: AIAGENTS_GRAPH_KQL });
+    const results = Array.isArray(json.results) ? json.results : [];
+    const rows = results.map(r => ({
+      agentName: r.AgentName || '',
+      vendor: '', deviceName: r.DeviceName || '', osPlatform: '', userName: '',
+      detectedAtMs: null
+    }));
+    checked.push({ source: 'ExposureGraph', outcome: rows.length });
+    if (rows.length) return { rows, source: 'ExposureGraph', checked };
+  } catch (e) {
+    if (e.status !== 400) throw e;
+    checked.push({ source: 'ExposureGraph', outcome: 'absent' });
+  }
+  return { rows: [], source: null, checked };
+}
+
+// Fleet-scan: the "THE Intune Dashboard - AI Agent Scan" Proactive Remediation
+// (scripts/ai-agent-detect.ps1). Always merged with Defender hunting so agents
+// Microsoft's catalog omits (e.g. Grok Build) still surface when the PR finds them.
+// Mirrors metering: per-customer script ID with by-name self-heal, deviceRunStates
+// fan-out, gzip+base64 decode of detection output.
+let aiagentsScanDevices = 0;
+let aiagentsScanDecodeFail = 0;
+let aiagentsScanLastRunMs = null;
+let aiagentsFleetOnlyCount = 0;
+let aiagentsScanScriptId = null;
+let aiagentsScanStale = false;
+const AI_SCAN_STALE_MS = 2 * 86400000; // warn / re-pick when last Graph report older than this
+
+function parseAiScanPayload(text) {
+  const lines = String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/);
+  if (lines.length < 2) throw new Error('payload too short');
+  if (lines[0].split('|')[0] !== 'v1') throw new Error('unsupported version');
+  const rows = [];
+  for (let i = 2; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const parts = line.split('|');
+    // Tolerate trailing empty fields / extra pipe noise — need agent + daysAgo at least.
+    if (parts.length < 6 || !parts[0]) continue;
+    const daysAgo = parseInt(parts[5], 10);
+    rows.push({
+      agent: parts[0], vendor: parts[1] || '', ver: parts[2] || '',
+      user: parts[3] || '', via: parts[4] || '',
+      daysAgo: Number.isNaN(daysAgo) ? -1 : daysAgo
+    });
+  }
+  return { rows };
+}
+
+function agentRowKey(r) {
+  return [(r.agentName || ''), (r.deviceName || ''), (r.userName || '')]
+    .map(s => s.toLowerCase()).join('\0');
+}
+
+// Primary (Defender) wins on key collision; secondary (fleet) adds catalog gaps.
+function mergeAgentRows(primary, secondary) {
+  const map = new Map();
+  for (const r of primary) map.set(agentRowKey(r), r);
+  let added = 0;
+  for (const r of secondary) {
+    const k = agentRowKey(r);
+    if (!map.has(k)) { map.set(k, r); added++; }
+  }
+  return { rows: [...map.values()], added };
+}
+
+async function listAiScanScriptsByName() {
+  try {
+    const filter = `displayName eq '${AI_SCAN_SCRIPT_NAME.replace(/'/g, "''")}'`;
+    const found = await graphGet(
+      `beta/deviceManagement/deviceHealthScripts?$filter=${encodeURIComponent(filter)}&$select=id,displayName,lastModifiedDateTime`
+    );
+    return (found && found.value) || [];
+  } catch (_) {
+    return [];
+  }
+}
+
+// Newest lastStateUpdate across a script's deviceRunStates (first pages only — enough to rank).
+async function peekAiScanLastRunMs(scriptId) {
+  try {
+    const data = await graphGet(
+      `beta/deviceManagement/deviceHealthScripts/${encodeURIComponent(scriptId)}/deviceRunStates?$select=lastStateUpdateDateTime&$top=100`
+    );
+    let best = 0;
+    for (const s of (data.value || [])) {
+      const t = Date.parse(s.lastStateUpdateDateTime);
+      if (!Number.isNaN(t) && t > best) best = t;
+    }
+    return best || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Pick the live AI Agent Scan remediation. Never trust a stored GUID alone —
+// redeploys mint a new id while localStorage keeps the old one, which freezes
+// "Last fleet report" on the abandoned script (e.g. stuck on July 8 while the
+// device log shows July 10+ runs against the new policy).
+async function resolveAiScanScriptId() {
+  const customer = loadCustomers().find(c => c.code === getActiveCustomerCode());
+  const stored = customer && customer.aiScanScriptId;
+  const byName = await listAiScanScriptsByName();
+
+  const candidates = [];
+  const seen = new Set();
+  for (const h of byName) {
+    if (h.id && !seen.has(h.id)) { seen.add(h.id); candidates.push(h); }
+  }
+  if (stored && !seen.has(stored)) {
+    candidates.push({ id: stored, lastModifiedDateTime: null, _storedOnly: true });
+  }
+  if (!candidates.length) return null;
+  if (candidates.length === 1) {
+    const id = candidates[0].id;
+    if (customer && id !== stored) saveMeteringScriptIdToActiveCustomer(id, 'aiScanScriptId');
+    return id;
+  }
+
+  let best = null; // { id, score }
+  for (const c of candidates) {
+    const lastRun = await peekAiScanLastRunMs(c.id);
+    const lastMod = c.lastModifiedDateTime ? Date.parse(c.lastModifiedDateTime) : 0;
+    // Prefer freshest device report; break ties with Intune lastModified.
+    const score = (lastRun || 0) * 2 + (Number.isNaN(lastMod) ? 0 : lastMod);
+    if (!best || score > best.score) best = { id: c.id, score, lastRun };
+  }
+  const id = best.id;
+  if (customer && id !== stored) {
+    saveMeteringScriptIdToActiveCustomer(id, 'aiScanScriptId');
+    console.log(`[AI agents] Re-linked fleet scan script ${stored || '(none)'} → ${id} (fresher deviceRunStates)`);
+  }
+  return id;
+}
+
+function relinkAiScanScript() {
+  clearMeteringScriptIdForActiveCustomer('aiScanScriptId');
+  aiagentsLoaded = false;
+  loadAiAgents(true);
+}
+
+// Push scripts/ai-agent-detect.ps1 into the tenant remediation in place (PATCH).
+// Needed after catalog edits (Grok, agent-name logging) — redeploy alone is easy to skip.
+async function pushAiScanScriptContent() {
+  try {
+    const writeToken = await ensureMeteringWriteConsent();
+    const res = await fetch('scripts/ai-agent-detect.ps1');
+    if (!res.ok) throw new Error(`Could not fetch scripts/ai-agent-detect.ps1 (${res.status}). Serve over http:// or use GitHub Pages.`);
+    const text = await res.text();
+    const enc = new TextEncoder().encode(text);
+    let binary = '';
+    for (let i = 0; i < enc.length; i++) binary += String.fromCharCode(enc[i]);
+    const b64 = btoa(binary);
+    let scriptId = aiagentsScanScriptId || await resolveAiScanScriptId();
+    if (!scriptId) throw new Error('No AI Agent Scan remediation found in this tenant. Deploy it first.');
+    const body = {
+      displayName: AI_SCAN_SCRIPT_NAME,
+      description: AI_SCAN_DESCRIPTION,
+      detectionScriptContent: b64,
+      // detection-only — keep remediation empty
+      runAsAccount: 'system',
+      runAs32Bit: false,
+      enforceSignatureCheck: false
+    };
+    await imeWrite(h => graphPatch(
+      `beta/deviceManagement/deviceHealthScripts/${encodeURIComponent(scriptId)}`,
+      body,
+      { headers: h, token: writeToken }
+    ));
+    $('aiagentsNotice').innerHTML =
+      `<div class="notice-banner">✓ Pushed latest <code>ai-agent-detect.ps1</code> to Intune script <code>${esc(scriptId)}</code>. Devices pick it up on the next daily run (or force a sync). Then ↻ Refresh this tab.</div>`;
+    imeToast('AI Agent Scan script updated in Intune.', 'ok');
+  } catch (e) {
+    $('aiagentsError').innerHTML =
+      `<div class="error-banner">Push script failed: ${esc(e.message || String(e))}</div>`;
+  }
+}
+
+async function queryFleetScan(checked) {
+  aiagentsScanDevices = 0;
+  aiagentsScanDecodeFail = 0;
+  aiagentsScanLastRunMs = null;
+  aiagentsScanScriptId = null;
+  aiagentsScanStale = false;
+  const scriptId = await resolveAiScanScriptId();
+  if (!scriptId) {
+    checked.push({ source: 'FleetScan', outcome: 'absent' });
+    return null;
+  }
+  aiagentsScanScriptId = scriptId;
+  try {
+    const runStates = await graphGetAll(`beta/deviceManagement/deviceHealthScripts/${encodeURIComponent(scriptId)}/deviceRunStates?$expand=managedDevice($select=id,deviceName)&$top=200`);
+    const rows = [];
+    const devices = new Set();
+    let decodeFail = 0;
+    for (const rs of runStates) {
+      const raw = (rs.preRemediationDetectionScriptOutput || '').trim();
+      if (!raw || raw.startsWith('v1|error|')) continue;
+      const deviceName = (rs.managedDevice && rs.managedDevice.deviceName) || '(unknown)';
+      if (rs.lastStateUpdateDateTime) {
+        const t = Date.parse(rs.lastStateUpdateDateTime);
+        if (!Number.isNaN(t) && (aiagentsScanLastRunMs == null || t > aiagentsScanLastRunMs)) {
+          aiagentsScanLastRunMs = t;
+        }
+      }
+      try {
+        const parsed = parseAiScanPayload(await gunzipB64(raw));
+        if (parsed.rows.length) devices.add(deviceName);
+        for (const r of parsed.rows) {
+          rows.push({
+            agentName: r.agent,
+            vendor: r.vendor,
+            version: r.ver,
+            deviceName,
+            osPlatform: 'Windows',
+            userName: r.user === '*' ? '' : r.user,
+            via: r.via,
+            detectedAtMs: r.daysAgo >= 0 ? Date.now() - r.daysAgo * 86400000 : null
+          });
+        }
+      } catch (_) { decodeFail++; }
+    }
+    aiagentsScanDevices = devices.size;
+    aiagentsScanDecodeFail = decodeFail;
+    if (aiagentsScanLastRunMs != null && (Date.now() - aiagentsScanLastRunMs) > AI_SCAN_STALE_MS) {
+      aiagentsScanStale = true;
+    }
+    checked.push({ source: 'FleetScan', outcome: rows.length });
+    if (decodeFail) checked.push({ source: 'FleetScanDecode', outcome: decodeFail });
+    return { rows };
+  } catch (e) {
+    if (e.status === 404) {
+      clearMeteringScriptIdForActiveCustomer('aiScanScriptId');
+      checked.push({ source: 'FleetScan', outcome: 'absent' });
+      return null;
+    }
+    throw e;
+  }
+}
+
+function aiagentsSourceNoticeHtml() {
+  const labels = {
+    AgentsInfo: 'AgentsInfo', AIAgentsInfo: 'AIAgentsInfo',
+    ExposureGraph: 'Exposure graph (endpointAiAgent)', AdvancedHunting: 'Advanced hunting',
+    FleetScan: 'Fleet scan (Proactive Remediation)', FleetScanDecode: 'Fleet decode failures'
+  };
+  const lastRun = aiagentsScanLastRunMs
+    ? ` Last fleet report: <strong>${esc(new Date(aiagentsScanLastRunMs).toLocaleString())}</strong>.`
+    : '';
+  const scriptMeta = aiagentsScanScriptId
+    ? ` Script id: <code style="font-size:11px;">${esc(aiagentsScanScriptId)}</code>.`
+    : '';
+  const staleWarn = aiagentsScanStale
+    ? ` <strong style="color:var(--danger);">Stale:</strong> Graph has not received a device report in over 2 days — the dashboard may be linked to an old remediation, or devices are not uploading output. `
+      + `<button class="btn" style="margin:4px 6px 0 0; padding:4px 10px; font-size:12px;" onclick="relinkAiScanScript()">↻ Re-link script</button>`
+      + `<button class="btn" style="margin:4px 0 0; padding:4px 10px; font-size:12px;" onclick="pushAiScanScriptContent()">⬆ Push latest .ps1</button>`
+    : (aiagentsScanScriptId
+      ? ` <button class="btn" style="margin:4px 0 0; padding:4px 10px; font-size:12px;" onclick="pushAiScanScriptContent()">⬆ Push latest .ps1 to Intune</button>`
+      : '');
+  if (!aiagentsRows.length) {
+    const detail = (aiagentsChecked || []).map(c => {
+      if (c.source === 'FleetScanDecode') return `<code>${esc(labels[c.source])}</code>: ${c.outcome}`;
+      const outcome = c.outcome === 'absent'
+        ? (c.source === 'FleetScan' ? 'not deployed / not found by name' : 'not present in tenant')
+        : 'queryable, 0 rows';
+      return `<code>${esc(labels[c.source] || c.source)}</code>: ${outcome}`;
+    }).join(' · ');
+    const scanDeployed = (aiagentsChecked || []).some(c => c.source === 'FleetScan' && c.outcome !== 'absent');
+    const deployCta = scanDeployed
+      ? `The fleet scan is deployed but no device has reported a detection yet — devices run it on their daily schedule, so allow one check-in cycle (typically ≤ 24h) and ↻ Refresh.${lastRun}${scriptMeta}${staleWarn}`
+      : `<button class="btn" style="margin-top:4px;" onclick="openMeteringDeployModal('aiscan')">⚡ Deploy AI Agent Scan…</button> — an agentless Proactive Remediation (<code>scripts/ai-agent-detect.ps1</code>, same pattern as Software Metering) that hunts AI agents client-side until Microsoft enables Defender agent discovery by default. Devices report on their next daily run.`;
+    return `<div class="notice-banner"><strong>No local AI agents discovered yet.</strong><br>Source check — ${detail}.<br>${deployCta}<br><br><strong>Why the Defender sources are empty:</strong> agent discovery is a staged preview — it requires Defender for Endpoint P2, onboarded devices running Defender Antivirus in active mode, the agent on <a href="https://learn.microsoft.com/en-us/defender-endpoint/local-agent-discovery-overview" target="_blank" rel="noopener noreferrer">Microsoft's supported-agent list</a>, and currently ships through Defender's <strong>Beta platform/engine update channel</strong>. Ground truth lives in the Defender portal → <strong>Assets → AI Agents → Local agents</strong>; if agents show there but not here, that's a dashboard bug — tell us. Agents not on Microsoft's list (e.g. <strong>Grok Build</strong>) only appear via fleet scan.</div>`;
+  }
+  if (aiagentsSource === 'Merged') {
+    return `<div class="notice-banner">Source: <strong>Defender + Fleet scan</strong> — hunting rows merged with the <code>${esc(AI_SCAN_SCRIPT_NAME)}</code> Proactive Remediation (${aiagentsScanDevices} device${aiagentsScanDevices === 1 ? '' : 's'}; <strong>${aiagentsFleetOnlyCount}</strong> install${aiagentsFleetOnlyCount === 1 ? '' : 's'} only in fleet scan — typically agents Microsoft's catalog omits, e.g. Grok Build).${lastRun}${scriptMeta}${staleWarn}${aiagentsScanDecodeFail ? ` <span style="color:var(--danger);">${aiagentsScanDecodeFail} device snapshot(s) failed to decode.</span>` : ''}</div>`;
+  }
+  if (aiagentsSource === 'FleetScan') {
+    return `<div class="notice-banner">Source: <strong>Fleet scan</strong> — the <code>${esc(AI_SCAN_SCRIPT_NAME)}</code> Proactive Remediation (${aiagentsScanDevices} device${aiagentsScanDevices === 1 ? '' : 's'} reporting detections). Defender hunting was empty; this client-side scan fills the tab (and keeps agents Microsoft doesn't catalog, like <strong>Grok Build</strong>). "Detected" is the install-artifact creation date reported by the scan.${lastRun}${scriptMeta}${staleWarn}${aiagentsScanDecodeFail ? ` <span style="color:var(--danger);">${aiagentsScanDecodeFail} device snapshot(s) failed to decode.</span>` : ''}</div>`;
+  }
+  if (aiagentsSource === 'ExposureGraph') {
+    return `<div class="notice-banner">Source: exposure graph (<code>ExposureGraphEdges</code> · <code>endpointAiAgent</code> nodes) — Microsoft's documented home for endpoint agent discovery. This source carries agent + device only, so Vendor / OS / User / Detected show "—" and the <strong>New (7 days)</strong> tile is unavailable. Fleet scan was empty or not deployed — agents outside Microsoft's catalog will not appear until the scan reports.${scriptMeta}${staleWarn}</div>`;
+  }
+  return `<div class="notice-banner">Source: Defender XDR <code>${esc(aiagentsSource)}</code> table.${aiagentsSource === 'AIAgentsInfo' ? ' Heads-up: this table is retired on <strong>July 1, 2026</strong> in favour of <code>AgentsInfo</code>; the dashboard already tries the new name first on every load.' : ''} Fleet scan was empty or not deployed — agents outside Microsoft's catalog (e.g. Grok) need the AI Agent Scan remediation.${lastRun}${scriptMeta}${staleWarn}</div>`;
+}
+
+async function loadAiAgents(force = false) {
+  if (aiagentsLoading) return;
+  if (aiagentsLoaded && !force) return;
+  aiagentsLoading = true;
+  aiagentsFleetOnlyCount = 0;
+  $('aiagentsLoading').style.display = '';
+  $('aiagentsContent').style.display = 'none';
+  $('aiagentsError').innerHTML = '';
+  $('aiagentsNotice').innerHTML = '';
+  try {
+    const [agents, fleetJson] = await Promise.all([
+      queryLocalAgents().catch(e => {
+        // All-hunting-sources-missing is not fatal — the fleet scan below can
+        // still carry the tab. 403s and other real errors still surface.
+        if (e.status === 400) return { rows: [], source: null, checked: [{ source: 'AdvancedHunting', outcome: 'absent' }] };
+        throw e;
+      }),
+      graphPost('v1.0/security/runHuntingQuery', { Query: AIAGENTS_FLEET_KQL }).catch(() => null)
+    ]);
+    let rows = agents.rows || [];
+    let source = agents.source;
+    const checked = agents.checked || [];
+    // Always pull fleet scan — do not skip when hunting has rows. Grok Build and
+    // other non-catalog agents only exist on this path.
+    const scan = await queryFleetScan(checked).catch(e => {
+      if (e && e.status === 403) throw e;
+      console.warn('Fleet scan failed', e);
+      checked.push({ source: 'FleetScan', outcome: 'absent' });
+      return null;
+    });
+    if (scan && scan.rows.length) {
+      if (!rows.length) {
+        rows = scan.rows;
+        source = 'FleetScan';
+      } else {
+        const merged = mergeAgentRows(rows, scan.rows);
+        rows = merged.rows;
+        aiagentsFleetOnlyCount = merged.added;
+        source = merged.added ? 'Merged' : source;
+      }
+    }
+    aiagentsRows = rows;
+    aiagentsSource = source;
+    aiagentsChecked = checked;
+    const fleetRows = fleetJson && Array.isArray(fleetJson.results) ? fleetJson.results : [];
+    aiagentsFleetTotal = fleetRows.length ? (Number(fleetRows[0].Total) || null) : null;
+    aiagentsLoaded = true;
+    const names = [...new Set(rows.map(r => r.agentName).filter(Boolean))].sort();
+    console.log(`[AI agents] source=${source} rows=${rows.length} fleetDevices=${aiagentsScanDevices} fleetOnly=${aiagentsFleetOnlyCount} decodeFail=${aiagentsScanDecodeFail} names=`, names);
+    $('aiagentsLoading').style.display = 'none';
+    $('aiagentsContent').style.display = '';
+    $('aiagentsNotice').innerHTML = aiagentsSourceNoticeHtml();
+    renderAiAgents();
+  } catch (e) {
+    $('aiagentsLoading').style.display = 'none';
+    if (e.status === 403) {
+      $('aiagentsError').innerHTML = hunting403Html(e);
+    } else {
+      console.error('AI agents load failed', e);
+      $('aiagentsError').innerHTML = `<div class="error-banner">Failed to load AI agents: ${esc(e.message || String(e))}</div>`;
+    }
+  } finally {
+    aiagentsLoading = false;
+  }
+}
+
+function aiIsNew(r) {
+  return r.detectedAtMs != null && (Date.now() - r.detectedAtMs) <= AI_NEW_WINDOW_MS;
+}
+
+function applyAiAgentsFilters(rows) {
+  const q = ($('aiagentsFilter').value || '').toLowerCase().trim();
+  return rows.filter(r => {
+    if (aiagentsTileFilter === 'new' && !aiIsNew(r)) return false;
+    if (q) {
+      const hay = (r.agentName + ' ' + r.vendor + ' ' + r.deviceName + ' ' + r.userName).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function renderAiAgentsTiles() {
+  const names = new Set(), devices = new Set();
+  let fresh = 0;
+  for (const r of aiagentsRows) {
+    if (r.agentName) names.add(r.agentName.toLowerCase());
+    if (r.deviceName) devices.add(r.deviceName.toLowerCase());
+    if (aiIsNew(r)) fresh++;
+  }
+  $('aiTileTotal').textContent = aiagentsRows.length;
+  $('aiTileNames').textContent = names.size;
+  $('aiTileDevices').textContent = devices.size;
+  // The exposure-graph source has no install timestamps — show an honest
+  // em-dash rather than a 0 that pretends nothing is new.
+  const anyTimestamps = aiagentsRows.some(r => r.detectedAtMs != null);
+  $('aiTileNew').textContent = (aiagentsRows.length && !anyTimestamps) ? '—' : fresh;
+
+  // Fleet footprint gauge — devices with ≥1 agent / Defender-onboarded
+  // devices seen in the last 7 days. Amber on purpose: an AI-agent
+  // footprint is a watch metric, not a success rate.
+  const ring = $('aiFootprintRing');
+  const CIRC = 125.66; // 2 * π * 20
+  if (!aiagentsFleetTotal || devices.size > aiagentsFleetTotal) {
+    $('aiTileFootprint').textContent = '—';
+    $('aiTileFootprint').style.color = 'var(--muted)';
+    if (ring) ring.style.strokeDashoffset = CIRC;
+  } else {
+    const rate = (devices.size / aiagentsFleetTotal) * 100;
+    const shown = rate > 0 && rate < 1 ? '<1' : Math.round(rate);
+    $('aiTileFootprint').textContent = shown + '%';
+    $('aiTileFootprint').style.color = '';
+    if (ring) ring.style.strokeDashoffset = CIRC * (1 - rate / 100);
+  }
+
+  document.querySelectorAll('#intuneSubAiagents [data-ai-tile]').forEach(tile => {
+    tile.classList.toggle('active', tile.dataset.aiTile !== '' && aiagentsTileFilter === tile.dataset.aiTile);
+  });
+  const searchActive = !!($('aiagentsFilter').value || '').trim();
+  $('btnAiagentsClearKpi').style.display = (aiagentsTileFilter || searchActive) ? '' : 'none';
+}
+
+function aiGroupByAgent(rows) {
+  const byName = new Map();
+  for (const r of rows) {
+    const key = (r.agentName || '(unnamed)').toLowerCase();
+    if (!byName.has(key)) {
+      byName.set(key, { agentName: r.agentName || '(unnamed)', vendor: r.vendor, installs: 0, devices: new Set(), lastMs: null });
+    }
+    const g = byName.get(key);
+    g.installs++;
+    if (!g.vendor && r.vendor) g.vendor = r.vendor;
+    if (r.deviceName) g.devices.add(r.deviceName.toLowerCase());
+    if (r.detectedAtMs != null && (g.lastMs == null || r.detectedAtMs > g.lastMs)) g.lastMs = r.detectedAtMs;
+  }
+  return [...byName.values()].map(g => ({
+    agentName: g.agentName, vendor: g.vendor, installs: g.installs, devices: g.devices.size, lastMs: g.lastMs
+  }));
+}
+
+function renderAiAgents() {
+  renderAiAgentsTiles();
+  const view = $('aiagentsViewMode').value;
+  const filtered = applyAiAgentsFilters(aiagentsRows);
+  const dir = aiagentsSortDir === 'asc' ? 1 : -1;
+  const sortRows = rows => rows.sort((a, b) => {
+    let av = a[aiagentsSortKey], bv = b[aiagentsSortKey];
+    if (av == null) av = dir > 0 ? Infinity : -Infinity;
+    if (bv == null) bv = dir > 0 ? Infinity : -Infinity;
+    if (typeof av === 'string') { av = av.toLowerCase(); bv = (bv || '').toString().toLowerCase(); }
+    if (av < bv) return -dir;
+    if (av > bv) return dir;
+    return (a.agentName || '').toLowerCase().localeCompare((b.agentName || '').toLowerCase());
+  });
+
+  const arrow = key => `<span class="arrow">${aiagentsSortKey === key ? (aiagentsSortDir === 'asc' ? '▲' : '▼') : '▼'}</span>`;
+  const newBadge = `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:#fff8d6; border:1px solid #f0d090; color:#6a5314;">New</span>`;
+  const table = $('aiagentsTable');
+  let rows;
+  if (view === 'byagent') {
+    rows = sortRows(aiGroupByAgent(filtered));
+    table.innerHTML = `<thead><tr>
+        <th data-ai-sort="agentName">Agent name ${arrow('agentName')}</th>
+        <th data-ai-sort="vendor">Vendor ${arrow('vendor')}</th>
+        <th data-ai-sort="installs">Installs ${arrow('installs')}</th>
+        <th data-ai-sort="devices">Devices ${arrow('devices')}</th>
+        <th data-ai-sort="lastMs">Last detected ${arrow('lastMs')}</th>
+      </tr></thead><tbody>` + (rows.length ? rows.map(r => `<tr>
+        <td>${esc(r.agentName) || '—'}</td>
+        <td>${esc(r.vendor) || '—'}</td>
+        <td>${r.installs}</td>
+        <td>${r.devices}</td>
+        <td class="date">${r.lastMs == null ? '—' : new Date(r.lastMs).toLocaleDateString()}</td>
+      </tr>`).join('') : `<tr><td colspan="5" style="text-align:center; color:var(--muted); padding:24px;">No AI agents match the current filters.</td></tr>`) + `</tbody>`;
+    $('aiagentsCountLabel').textContent = 'agents';
+  } else {
+    rows = sortRows(filtered.slice());
+    table.innerHTML = `<thead><tr>
+        <th data-ai-sort="agentName">Agent name ${arrow('agentName')}</th>
+        <th data-ai-sort="vendor">Vendor ${arrow('vendor')}</th>
+        <th data-ai-sort="deviceName">Device ${arrow('deviceName')}</th>
+        <th data-ai-sort="osPlatform">OS ${arrow('osPlatform')}</th>
+        <th data-ai-sort="userName">User ${arrow('userName')}</th>
+        <th data-ai-sort="detectedAtMs">Detected ${arrow('detectedAtMs')}</th>
+      </tr></thead><tbody>` + (rows.length ? rows.map(r => `<tr>
+        <td${r.via ? ` title="Detected via ${esc(r.via)}"` : ''}>${esc(r.agentName) || '—'}${r.version ? ` <span style="color:var(--muted); font-size:11px;">${esc(r.version)}</span>` : ''} ${aiIsNew(r) ? newBadge : ''}</td>
+        <td>${esc(r.vendor) || '—'}</td>
+        <td>${esc(r.deviceName) || '—'}</td>
+        <td>${esc(r.osPlatform) || '—'}</td>
+        <td>${esc(r.userName) || '—'}</td>
+        <td class="date">${r.detectedAtMs == null ? '—' : new Date(r.detectedAtMs).toLocaleString()}</td>
+      </tr>`).join('') : `<tr><td colspan="6" style="text-align:center; color:var(--muted); padding:24px;">No AI agents match the current filters.</td></tr>`) + `</tbody>`;
+    $('aiagentsCountLabel').textContent = 'installations';
+  }
+  $('aiagentsCount').textContent = rows.length;
+
+  table.querySelectorAll('th[data-ai-sort]').forEach(th => {
+    th.addEventListener('click', () => {
+      const key = th.dataset.aiSort;
+      if (aiagentsSortKey === key) aiagentsSortDir = aiagentsSortDir === 'asc' ? 'desc' : 'asc';
+      else { aiagentsSortKey = key; aiagentsSortDir = 'asc'; }
+      renderAiAgents();
+    });
+  });
+}
+
+function exportAiAgentsCsv() {
+  const view = $('aiagentsViewMode').value;
+  const filtered = applyAiAgentsFilters(aiagentsRows);
+  let header, body;
+  if (view === 'byagent') {
+    header = ['AgentName','Vendor','Installs','Devices','LastDetected'];
+    body = aiGroupByAgent(filtered).map(r => [
+      r.agentName, r.vendor, r.installs, r.devices,
+      r.lastMs == null ? '' : new Date(r.lastMs).toISOString()
+    ]);
+  } else {
+    header = ['AgentName','Vendor','Version','DeviceName','OSPlatform','UserName','DetectedVia','DetectedAt'];
+    body = filtered.map(r => [
+      r.agentName, r.vendor, r.version || '', r.deviceName, r.osPlatform, r.userName, r.via || '',
+      r.detectedAtMs == null ? '' : new Date(r.detectedAtMs).toISOString()
+    ]);
+  }
+  const lines = [header.join(',')].concat(body.map(cols => cols.map(escCsv).join(',')));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `ai-agents-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Wire controls
+$('aiagentsFilter').addEventListener('input', renderAiAgents);
+$('aiagentsViewMode').addEventListener('change', () => {
+  // Reset the sort to the natural default of the new view
+  if ($('aiagentsViewMode').value === 'byagent') { aiagentsSortKey = 'installs'; aiagentsSortDir = 'desc'; }
+  else { aiagentsSortKey = 'detectedAtMs'; aiagentsSortDir = 'desc'; }
+  renderAiAgents();
+});
+$('btnAiagentsRefresh').addEventListener('click', () => loadAiAgents(true));
+$('btnAiagentsExport').addEventListener('click', exportAiAgentsCsv);
+$('btnAiagentsClearKpi').addEventListener('click', () => {
+  aiagentsTileFilter = null;
+  $('aiagentsFilter').value = '';
+  $('aiagentsFilter').dispatchEvent(new Event('input', { bubbles: true }));
+  renderAiAgents();
+});
+document.querySelectorAll('#intuneSubAiagents [data-ai-tile]').forEach(tile => {
+  tile.addEventListener('click', () => {
+    const target = tile.dataset.aiTile;
+    if (target === '') aiagentsTileFilter = null;
+    else aiagentsTileFilter = aiagentsTileFilter === target ? null : target;
+    renderAiAgents();
+  });
+});
+$('aiTileNamesTile').addEventListener('click', () => {
+  $('aiagentsViewMode').value = 'byagent';
+  $('aiagentsViewMode').dispatchEvent(new Event('change', { bubbles: true }));
+});
+
+function braysRefresh() {
+  const name = activeSubtab;
+  if (name === 'overview') {
+    if (overviewLoading) return;
+    overviewLoaded = false;
+    return loadOverview();
+  }
+  if (name === 'installed') { installedAppsLoaded = false; return loadInstalledApps(); }
+  if (name === 'approvals') return loadApprovals(true);
+  if (name === 'failed') { failedAppsLoaded = false; return loadApps(); }
+  if (name === 'required') { requiredLoaded = false; return loadRequiredApps(); }
+  if (name === 'uninstall') { uninstallLoaded = false; return loadUninstallApps(); }
+  if (name === 'metering') return loadMetering(true);
+  if (name === 'remediation') return loadRemediation(true);
+  if (name === 'hardware') { hwLoaded = false; return loadHardware(); }
+  if (name === 'diskspace') return loadDiskspace(true);
+  if (name === 'appversions') return loadAppversions(true);
+  if (name === 'autopilot') return loadAutopilot(true);
+  if (name === 'bitlocker') return loadBitlocker(true);
+  if (name === 'secureboot') return loadSecureBoot(true);
+  if (name === 'certhealth') return loadCerthealth(true);
+  if (name === 'assignments') return loadAssignmentsPolicies(true);
+  if (name === 'posture') return loadPosture(true);
+  if (name === 'vulnerabilities') return loadVulnerabilities(true);
+  if (name === 'drift') return loadDriftData(true);
+  if (name === 'softdeleted') { softdeletedLoaded = false; softdeletedLoading = false; return loadSoftdeleted(); }
+  if (name === 'staleusers') return loadStaleUsers(true);
+  if (name === 'aiagents') return loadAiAgents(true);
+}
+
+function braysBoot() {
+  renderSessionPill();
+  const pill = $('sessionPill');
+  if (pill && !pill.dataset.bound) {
+    pill.dataset.bound = '1';
+    pill.addEventListener('click', () => {
+      sessionStorage.removeItem('apiSession');
+      renderSessionPill();
+    });
+  }
+  switchTab(TAB_INTUNE);
+  const hash = (location.hash || '').replace(/^#\/?/, '');
+  if (hash === 'local' || hash === 'analyze' || hash === 'settings' || hash.indexOf('settings-') === 0) {
+    switchTab(hash === 'local' ? TAB_LOCAL : hash === 'analyze' ? TAB_ANALYZE : TAB_SETTINGS);
+  } else if (hash && hash !== 'dashboard' && hash !== 'reports' && SUBTAB_CFG[hash]) {
+    switchSubtab(hash);
+  }
+  document.dispatchEvent(new CustomEvent('brays-ready'));
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', braysBoot);
+else braysBoot();
+
+window.brays = {
+  switchTab: switchTab,
+  switchSubtab: switchSubtab,
+  refresh: braysRefresh,
+  activeSubtab: function () { return activeSubtab; }
+};
