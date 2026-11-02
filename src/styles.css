@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "@phosphor-icons/web/regular";
+@import "@phosphor-icons/web/fill";
 @import "@ashmore-studios/ui/styles.css";
 @source "../node_modules/@ashmore-studios/ui/dist";
 @import "../public/css/dashboard.css";
@@ -153,4 +155,21 @@ body::before {
 }
 #legacy-root #viewSettings .table-card > div > div:first-child {
   @apply text-sm font-medium;
+}
+#legacy-root .ph,
+#legacy-root .ph-fill {
+  @apply inline-block align-[-0.125em] text-[1.05em] leading-none;
+}
+#legacy-root .ph-status-good { color: var(--good-ink); }
+#legacy-root .ph-status-bad { color: var(--bad-ink); }
+#legacy-root .ph-status-watch { color: var(--watch-ink); }
+#legacy-root .ph-status-warn { color: var(--warn-ink); }
+#legacy-root tbody tr.warn-row,
+#legacy-root tr:has([data-warn-row]),
+#legacy-root article:has([data-warn-row]) {
+  background-color: var(--warn-bg);
+}
+#legacy-root tbody tr.warn-row:hover,
+#legacy-root tr:has([data-warn-row]):hover {
+  background-color: color-mix(in oklch, var(--warn-bg) 78%, var(--foreground));
 }

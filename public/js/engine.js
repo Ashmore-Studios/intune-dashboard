@@ -5,6 +5,12 @@ let sortDir = 'asc';
 
 const $ = id => document.getElementById(id);
 const esc = s => s == null ? '' : String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function sortIcon(dir) {
+  return `<i class="ph ph-${dir === 'asc' ? 'caret-up' : 'caret-down'}" aria-hidden="true"></i>`;
+}
+function setSortArrow(arrow, dir) {
+  if (arrow) arrow.innerHTML = sortIcon(dir);
+}
 const escCsv = v => {
   let s = v == null ? '' : String(v);
   if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; // neutralize Excel formula injection
@@ -36,7 +42,7 @@ function attachSearchClearButtons(root) {
     }
     const btn = document.createElement('span');
     btn.className = 'search-clear';
-    btn.textContent = '×';
+    btn.innerHTML = '<i class="ph ph-x" aria-hidden="true"></i>';
     btn.title = 'Clear';
     wrap.appendChild(btn);
     const update = () => btn.classList.toggle('show', input.value !== '');
@@ -189,7 +195,7 @@ function renderTable() {
     const arrow = th.querySelector('.arrow');
     if (th.dataset.sort === sortKey) {
       th.classList.add(sortDir === 'asc' ? 'sort-asc' : 'sort-desc');
-      arrow.textContent = sortDir === 'asc' ? '▲' : '▼';
+      setSortArrow(arrow, sortDir);
     }
   });
 }
@@ -214,7 +220,7 @@ function showDetail(row) {
   `;
 
   if (row._twin) {
-    html += `<div class="dedup-note">ℹ️ This app is also registered under <code>${esc(row._twin.RegistryPath)}</code>. Mirroring is normal for installers that target both 32-bit and 64-bit consumers.</div>`;
+    html += `<div class="dedup-note"><i class="ph ph-info" aria-hidden="true"></i>️ This app is also registered under <code>${esc(row._twin.RegistryPath)}</code>. Mirroring is normal for installers that target both 32-bit and 64-bit consumers.</div>`;
   }
 
   if (row.UninstallString || row.QuietUninstallString) {
@@ -234,7 +240,7 @@ function showDetail(row) {
     btn.addEventListener('click', () => {
       const text = btn.dataset.cmd === 'std' ? row.UninstallString : row.QuietUninstallString;
       navigator.clipboard.writeText(text);
-      btn.textContent = '✓ Copied';
+      btn.textContent = '<i class="ph ph-check" aria-hidden="true"></i> Copied';
       setTimeout(() => btn.textContent = 'Copy', 1500);
     });
   });
@@ -656,29 +662,29 @@ function renderCustomersList() {
   customers.forEach(c => { const e2 = (c.email || '').toLowerCase(); if (e2) emailCounts[e2] = (emailCounts[e2] || 0) + 1; });
   const dups = Object.keys(emailCounts).filter(k => emailCounts[k] > 1);
   const dupWarning = dups.length
-    ? `<div style="padding:10px 14px; border-bottom:1px solid var(--line); background:#fff7e6; color:#704500; font-size:12px;">⚠ Multiple customers share the login email ${dups.map(d => `<strong>${esc(d)}</strong>`).join(', ')}. MAA notifications match the signed-in account to the <em>first</em> customer with that email, so the wrong approver list may be used — give each customer a unique login email.</div>`
+    ? `<div style="padding:10px 14px; border-bottom:1px solid var(--line); background:var(--watch-bg); color:var(--watch-ink); font-size:12px;"><i class="ph ph-warning" aria-hidden="true"></i> Multiple customers share the login email ${dups.map(d => `<strong>${esc(d)}</strong>`).join(', ')}. MAA notifications match the signed-in account to the <em>first</em> customer with that email, so the wrong approver list may be used — give each customer a unique login email.</div>`
     : '';
   box.innerHTML = dupWarning + customers.map((c, i) => {
     const approvers = c.approvers || [];
     const approverLine = approvers.length
-      ? `<span data-customer-approvers="${esc(c.code)}" style="cursor:pointer; color:var(--ink-2);" title="Click to edit">📧 ${approvers.length} approver${approvers.length === 1 ? '' : 's'} — ${esc(approvers.join(', '))}</span>
-         <span data-test-approvers="${esc(c.code)}" style="cursor:pointer; color:var(--accent); font-weight:600; margin-left:8px;" title="Send a test notification to these approvers from your mailbox — same Graph path as the real MAA email (requires sign-in; Mail.Send consent on first use)">✉ Send test</span>
+      ? `<span data-customer-approvers="${esc(c.code)}" style="cursor:pointer; color:var(--ink-2);" title="Click to edit"><i class="ph ph-envelope" aria-hidden="true"></i> ${approvers.length} approver${approvers.length === 1 ? '' : 's'} — ${esc(approvers.join(', '))}</span>
+         <span data-test-approvers="${esc(c.code)}" style="cursor:pointer; color:var(--accent); font-weight:600; margin-left:8px;" title="Send a test notification to these approvers from your mailbox — same Graph path as the real MAA email (requires sign-in; Mail.Send consent on first use)"><i class="ph ph-envelope" aria-hidden="true"></i> Send test</span>
          <span id="testStatus_${esc(c.code)}" style="margin-left:6px;"></span>`
-      : `<span data-customer-approvers="${esc(c.code)}" style="cursor:pointer; color:var(--muted);" title="Click to add">📧 No approvers (click to add)</span>`;
+      : `<span data-customer-approvers="${esc(c.code)}" style="cursor:pointer; color:var(--muted);" title="Click to add"><i class="ph ph-envelope" aria-hidden="true"></i> No approvers (click to add)</span>`;
     const meteringId = c.meteringScriptId || '';
     const meteringLine = meteringId
-      ? `<span data-customer-metering="${esc(c.code)}" style="cursor:pointer; color:var(--ink-2); font-family:ui-monospace, monospace;" title="Click to edit">🔧 Metering: ${esc(meteringId.slice(0, 8))}…${esc(meteringId.slice(-4))}</span>`
-      : `<span data-customer-metering="${esc(c.code)}" style="cursor:pointer; color:var(--muted);" title="Click to add">🔧 No metering script (click to add)</span>`;
+      ? `<span data-customer-metering="${esc(c.code)}" style="cursor:pointer; color:var(--ink-2); font-family:ui-monospace, monospace;" title="Click to edit"><i class="ph ph-wrench" aria-hidden="true"></i> Metering: ${esc(meteringId.slice(0, 8))}…${esc(meteringId.slice(-4))}</span>`
+      : `<span data-customer-metering="${esc(c.code)}" style="cursor:pointer; color:var(--muted);" title="Click to add"><i class="ph ph-wrench" aria-hidden="true"></i> No metering script (click to add)</span>`;
     const imeId = c.imeCheckinScriptId || '';
     const imeLine = imeId
-      ? `<span data-customer-ime="${esc(c.code)}" style="cursor:pointer; color:var(--ink-2); font-family:ui-monospace, monospace;" title="Click to edit">⚡ IME check-in: ${esc(imeId.slice(0, 8))}…${esc(imeId.slice(-4))}</span>`
-      : `<span data-customer-ime="${esc(c.code)}" style="cursor:pointer; color:var(--muted);" title="Click to add">⚡ No IME check-in script (click to add)</span>`;
+      ? `<span data-customer-ime="${esc(c.code)}" style="cursor:pointer; color:var(--ink-2); font-family:ui-monospace, monospace;" title="Click to edit"><i class="ph ph-lightning" aria-hidden="true"></i> IME check-in: ${esc(imeId.slice(0, 8))}…${esc(imeId.slice(-4))}</span>`
+      : `<span data-customer-ime="${esc(c.code)}" style="cursor:pointer; color:var(--muted);" title="Click to add"><i class="ph ph-lightning" aria-hidden="true"></i> No IME check-in script (click to add)</span>`;
     return `
     <div style="padding:10px 14px; ${i < customers.length - 1 ? 'border-bottom:1px solid var(--line);' : ''}">
       <div style="display:flex; align-items:center; gap:12px;">
         <span style="font-weight:700; min-width:36px;">${esc(c.code)}</span>
         <span class="meta" style="flex:1; font-size:13px;">${esc(c.email)}</span>
-        <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px;" data-customer-delete="${esc(c.code)}" title="Remove">🗑</span>
+        <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px;" data-customer-delete="${esc(c.code)}" title="Remove"><i class="ph ph-trash" aria-hidden="true"></i></span>
       </div>
       <div style="font-size:11px; margin-top:4px; padding-left:48px;">${approverLine}</div>
       <div style="font-size:11px; margin-top:4px; padding-left:48px;">${meteringLine}</div>
@@ -699,7 +705,7 @@ async function testApprovers(code) {
   if (!approvers.length || !status) return;
   const account = msalApp && msalApp.getActiveAccount();
   if (!account) {
-    status.innerHTML = `<span style="color:#8a2020;">Sign in first — the test email sends from your mailbox.</span>`;
+    status.innerHTML = `<span style="color:var(--bad-ink);">Sign in first — the test email sends from your mailbox.</span>`;
     return;
   }
   status.textContent = 'Sending…';
@@ -715,12 +721,12 @@ async function testApprovers(code) {
       requester: { name: account.name || upn, email: upn }
     });
     logMailAttempt({ kind: 'test', customer: code, approvers, result: 'sent' });
-    status.innerHTML = `<span style="color:#1f5d33;">✓ Sent from ${esc(upn)} — check the recipients' inbox (and spam).</span>`;
+    status.innerHTML = `<span style="color:var(--good-ink);"><i class="ph ph-check" aria-hidden="true"></i> Sent from ${esc(upn)} — check the recipients' inbox (and spam).</span>`;
   } catch (e) {
     const raw = e.message || String(e);
     logMailAttempt({ kind: 'test', customer: code, approvers, result: 'failed', error: raw });
     const hint = friendlyMailError(raw);
-    status.innerHTML = `<span style="color:#8a2020;">✗ ${esc(hint || raw)}</span>${hint ? `<span style="color:var(--muted); font-size:10px;"> — ${esc(raw.slice(0, 180))}</span>` : ''}`;
+    status.innerHTML = `<span style="color:var(--bad-ink);"><i class="ph ph-x" aria-hidden="true"></i> ${esc(hint || raw)}</span>${hint ? `<span style="color:var(--muted); font-size:10px;"> — ${esc(raw.slice(0, 180))}</span>` : ''}`;
   }
   renderMailLog();
 }
@@ -1239,7 +1245,7 @@ function renderMailLog() {
   const log = loadMailLog();
   if (!log.length) { box.innerHTML = ''; return; }
   box.innerHTML = `
-    <div style="font-weight:600; font-size:12px; margin:12px 0 4px;">✉ Approver notification attempts (last ${log.length})</div>
+    <div style="font-weight:600; font-size:12px; margin:12px 0 4px;"><i class="ph ph-envelope" aria-hidden="true"></i> Approver notification attempts (last ${log.length})</div>
     <div style="border:1px solid var(--line); border-radius:8px; background:var(--row-hover); font-size:11px;">
       ${log.map((l, i) => `
         <div style="padding:6px 12px; ${i < log.length - 1 ? 'border-bottom:1px solid var(--line);' : ''} display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;">
@@ -1248,8 +1254,8 @@ function renderMailLog() {
           <span>${esc(l.customer || '—')}</span>
           <span style="flex:1; color:var(--ink-2); min-width:180px;">→ ${esc((l.approvers || []).join(', '))}</span>
           ${l.result === 'sent'
-            ? '<span style="color:#1f5d33; font-weight:600;">✓ sent</span>'
-            : `<span style="color:#8a2020; font-weight:600;">✗ ${esc((friendlyMailError(l.error || '') || l.error || 'failed').slice(0, 200))}</span>`}
+            ? '<span style="color:var(--good-ink); font-weight:600;"><i class="ph ph-check" aria-hidden="true"></i> sent</span>'
+            : `<span style="color:var(--bad-ink); font-weight:600;"><i class="ph ph-x" aria-hidden="true"></i> ${esc((friendlyMailError(l.error || '') || l.error || 'failed').slice(0, 200))}</span>`}
         </div>`).join('')}
     </div>`;
 }
@@ -1564,7 +1570,7 @@ function renderAppList() {
         <div class="meta">${meta}</div>
       </div>
       <div class="pub-small" style="min-width:90px; text-align:right;">${a.failedDeviceCount ?? ''} failed</div>
-      <div class="pub-small">→</div>
+      <div class="pub-small"><i class="ph ph-arrow-right" aria-hidden="true"></i></div>
     </div>`;
   }).join('');
 }
@@ -1813,9 +1819,9 @@ function fiIsInstalled(r) { return Number(r.InstallState) === 1; }
 function fiIsFailed(r) { return Number(r.InstallState) === 2 || (r.ErrorCode && String(r.ErrorCode) !== '0'); }
 function fiStateLabel(r) { return FI_STATE_LABELS[Number(r.InstallState)] || r.AppInstallState || String(r.InstallState ?? '—'); }
 function fiStateBadge(r) {
-  const c = fiIsInstalled(r) ? { bg: '#e7f6ec', bd: '#a7d7b5', fg: '#1f5d33' }
-    : fiIsFailed(r) ? { bg: '#fdecec', bd: '#f5b5b5', fg: '#8a2020' }
-    : { bg: '#fff8e6', bd: '#f0d090', fg: '#704500' };
+  const c = fiIsInstalled(r) ? { bg: 'var(--good-bg)', bd: 'var(--good-border)', fg: 'var(--good-ink)' }
+    : fiIsFailed(r) ? { bg: 'var(--bad-bg)', bd: 'var(--bad-border)', fg: 'var(--bad-ink)' }
+    : { bg: 'var(--watch-bg)', bd: 'var(--watch-border)', fg: 'var(--watch-ink)' };
   return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:${c.bg}; border:1px solid ${c.bd}; color:${c.fg};">${esc(fiStateLabel(r))}</span>`;
 }
 
@@ -1837,10 +1843,10 @@ function fiGroupDevices(rows) {
 }
 
 const FI_VERDICTS = {
-  installed:      { label: '🟢 Installed on device', bg: '#e7f6ec', bd: '#a7d7b5', fg: '#1f5d33', rank: 2 },
-  installedNoise: { label: '🟢 Installed on device', bg: '#e7f6ec', bd: '#a7d7b5', fg: '#1f5d33', rank: 1 },
-  failing:        { label: '🔴 Failing', bg: '#fdecec', bd: '#f5b5b5', fg: '#8a2020', rank: 0 },
-  other:          { label: '🟡 No definitive state', bg: '#fff8e6', bd: '#f0d090', fg: '#704500', rank: 3 }
+  installed:      { label: '<i class="ph-fill ph-circle ph-status-good" aria-hidden="true"></i> Installed on device', bg: 'var(--good-bg)', bd: 'var(--good-border)', fg: 'var(--good-ink)', rank: 2 },
+  installedNoise: { label: '<i class="ph-fill ph-circle ph-status-good" aria-hidden="true"></i> Installed on device', bg: 'var(--good-bg)', bd: 'var(--good-border)', fg: 'var(--good-ink)', rank: 1 },
+  failing:        { label: '<i class="ph-fill ph-circle ph-status-bad" aria-hidden="true"></i> Failing', bg: 'var(--bad-bg)', bd: 'var(--bad-border)', fg: 'var(--bad-ink)', rank: 0 },
+  other:          { label: '<i class="ph-fill ph-circle ph-status-watch" aria-hidden="true"></i> No definitive state', bg: 'var(--watch-bg)', bd: 'var(--watch-border)', fg: 'var(--watch-ink)', rank: 3 }
 };
 function fiVerdictBadge(g) {
   const v = FI_VERDICTS[g.verdict];
@@ -1873,7 +1879,7 @@ function renderFailed() {
     ? 'This app installs in <strong>SYSTEM</strong> context'
     : fiRunAsAccount === 'user' ? 'This app installs in <strong>user</strong> context' : 'Install context unknown — assuming device-scoped';
   $('fiModeHint').innerHTML = fiGrouped
-    ? `Grouped by device. ${ctx}, so one Installed session means the app is on the machine — Intune records a status row for <em>every user who signs in</em>, which is why a device can show both Installed and Failed. Click ▸ for the per-session rows. <span data-fi-toggle="1" style="cursor:pointer; color:var(--accent); font-weight:600;">Show flat session rows</span>`
+    ? `Grouped by device. ${ctx}, so one Installed session means the app is on the machine — Intune records a status row for <em>every user who signs in</em>, which is why a device can show both Installed and Failed. Click <i class="ph ph-caret-right" aria-hidden="true"></i> for the per-session rows. <span data-fi-toggle="1" style="cursor:pointer; color:var(--accent); font-weight:600;">Show flat session rows</span>`
     : `Flat view — one row per device + user session (Intune's native shape). ${ctx}. <span data-fi-toggle="1" style="cursor:pointer; color:var(--accent); font-weight:600;">Group by device</span>`;
 
   const tbody = $('failedRows');
@@ -1885,7 +1891,7 @@ function renderFailed() {
       ? `<td class="err-code err-clickable" data-row-idx="${window.__failedFiltered.indexOf(r)}" title="Click to analyze with AI">${esc(r.ErrorCode)}</td>`
       : `<td class="err-code">${esc(r.ErrorCode) || '—'}</td>`;
   };
-  const checkinCell = (r) => `<td style="white-space:nowrap;">${r.DeviceId ? `<span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:12px;" data-ime-checkin="${esc(r.DeviceId)}" data-ime-name="${esc(r.DeviceName || '')}" title="Force an IME required-app check-in on this device (on-demand)">⚡ Check-in</span>` : '—'}</td>`;
+  const checkinCell = (r) => `<td style="white-space:nowrap;">${r.DeviceId ? `<span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:12px;" data-ime-checkin="${esc(r.DeviceId)}" data-ime-name="${esc(r.DeviceName || '')}" title="Force an IME required-app check-in on this device (on-demand)"><i class="ph ph-lightning" aria-hidden="true"></i> Check-in</span>` : '—'}</td>`;
 
   if (!filtered.length) {
     tbody.innerHTML = '<tr><td colspan="9" class="empty">No devices found.</td></tr>';
@@ -1908,11 +1914,11 @@ function renderFailed() {
       const latestFail = g.rows.find(fiIsFailed);
       const primary = `
       <tr data-fi-device="${esc(g.key)}" style="cursor:pointer;" title="Click to ${open ? 'collapse' : 'expand'} the per-session rows">
-        <td class="app-name"><span style="display:inline-block; width:14px; color:var(--muted);">${open ? '▾' : '▸'}</span>${esc(selectedApp.displayName) || '—'}</td>
+        <td class="app-name"><span style="display:inline-block; width:14px; color:var(--muted);">${open ? '<i class="ph ph-caret-down" aria-hidden="true"></i>' : '<i class="ph ph-caret-right" aria-hidden="true"></i>'}</span>${esc(selectedApp.displayName) || '—'}</td>
         <td class="version">${esc(g.latest.AppVersion) || '—'}</td>
         <td><span class="badge platform-badge">${esc(g.latest.Platform) || '—'}</span></td>
         <td style="font-weight:600;">${esc(g.latest.DeviceName) || '—'}</td>
-        <td class="pub">${g.rows.length} session${g.rows.length === 1 ? '' : 's'} · ${g.installed}✓ ${g.failed}✗</td>
+        <td class="pub">${g.rows.length} session${g.rows.length === 1 ? '' : 's'} · ${g.installed}<i class="ph ph-check" aria-hidden="true"></i> ${g.failed}<i class="ph ph-x" aria-hidden="true"></i></td>
         <td>${fiVerdictBadge(g)}</td>
         ${latestFail ? errCellFor(latestFail) : '<td class="err-code">—</td>'}
         <td class="date">${esc(fmtIntuneDate(g.latest.LastModifiedDateTime))}</td>
@@ -1961,7 +1967,7 @@ function renderFailed() {
     const arrow = th.querySelector('.arrow');
     if (th.dataset.sort === failedSortKey) {
       th.classList.add(failedSortDir === 'asc' ? 'sort-asc' : 'sort-desc');
-      arrow.textContent = failedSortDir === 'asc' ? '▲' : '▼';
+      setSortArrow(arrow, failedSortDir);
     }
   });
 }
@@ -1976,7 +1982,7 @@ function fmtIntuneDate(iso) {
 $('failedFilter').addEventListener('input', renderFailed);
 
 // Grouped view: click a device row to expand/collapse its per-session rows.
-// Error-code and ⚡ Check-in clicks pass through to their own handlers.
+// Error-code and check-in clicks pass through to their own handlers.
 $('failedRows').addEventListener('click', e => {
   if (e.target.closest('.err-clickable') || e.target.closest('[data-ime-checkin]')) return;
   const tr = e.target.closest('[data-fi-device]');
@@ -2154,7 +2160,7 @@ function renderInstalledAppList() {
         <div class="name">${esc(a.displayName)}</div>
         <div class="meta">${meta}</div>
       </div>
-      <div class="pub-small">→</div>
+      <div class="pub-small"><i class="ph ph-arrow-right" aria-hidden="true"></i></div>
     </div>`;
   }).join('');
 
@@ -2347,7 +2353,7 @@ function renderInstalled() {
     const arrow = th.querySelector('.arrow');
     if (th.dataset.sortInst === installedSortKey) {
       th.classList.add(installedSortDir === 'asc' ? 'sort-asc' : 'sort-desc');
-      arrow.textContent = installedSortDir === 'asc' ? '▲' : '▼';
+      setSortArrow(arrow, installedSortDir);
     }
   });
 }
@@ -2358,7 +2364,7 @@ function copyInstalledNames() {
   navigator.clipboard.writeText(names).then(() => {
     const btn = $('btnCopyInstalled');
     const orig = btn.textContent;
-    btn.textContent = `✓ Copied ${rows.length}`;
+    btn.textContent = `<i class="ph ph-check" aria-hidden="true"></i> Copied ${rows.length}`;
     setTimeout(() => { btn.textContent = orig; }, 1500);
   });
 }
@@ -2466,7 +2472,7 @@ function formatWin32Rule(r) {
         <div><strong>Run as:</strong> ${esc(r.runAsAccount || '—')} ${r.runAs32Bit ? '(32-bit)' : ''}</div>
         <div><strong>Signature check:</strong> ${r.enforceSignatureCheck ? 'Yes' : 'No'}</div>
         <div style="margin-top:8px;"><strong>Script:</strong></div>
-        <pre style="background:#f5f0e8; border:1px solid var(--line); border-radius:6px; padding:12px; font-family:ui-monospace,monospace; font-size:12px; max-height:360px; overflow:auto; white-space:pre-wrap; margin:6px 0 0;">${esc(script)}</pre>
+        <pre style="background:var(--surface-muted); border:1px solid var(--line); border-radius:6px; padding:12px; font-family:ui-monospace,monospace; font-size:12px; max-height:360px; overflow:auto; white-space:pre-wrap; margin:6px 0 0;">${esc(script)}</pre>
       </div>`;
   }
 
@@ -2543,7 +2549,7 @@ function openDeleteModal(app) {
   $('delBody').innerHTML = `
     <p style="margin-top:0;">This permanently removes the app from this Intune tenant. Existing installs on devices are not uninstalled — but Intune will no longer manage or report on them.</p>
     <p>To confirm, type the app name exactly:</p>
-    <div style="background:var(--danger-soft); border:1px solid #f5b5b5; color:#8a2020; padding:10px 14px; border-radius:8px; font-family:ui-monospace,monospace; font-size:13px; margin-bottom:12px; word-break:break-word;">${esc(app.displayName || '')}</div>
+    <div style="background:var(--danger-soft); border:1px solid var(--bad-border); color:var(--bad-ink); padding:10px 14px; border-radius:8px; font-family:ui-monospace,monospace; font-size:13px; margin-bottom:12px; word-break:break-word;">${esc(app.displayName || '')}</div>
     <input type="text" id="delConfirmInput" class="search" placeholder="Type app name to confirm" autocomplete="off" style="width:100%; margin-bottom:16px;">
     <p style="margin-bottom:6px;">Justification <span style="color:var(--muted); font-weight:400;">(required by tenants with multi-admin approval; recorded in the Intune audit log)</span>:</p>
     <textarea id="delJustification" class="search" rows="3" placeholder="e.g. Retiring superseded app — replaced by v2 in package XYZ" style="width:100%; margin-bottom:16px; font-family:inherit; resize:vertical;"></textarea>
@@ -2608,7 +2614,7 @@ function renderApprovalStatusRow(state) {
   const row = $('delStatusRow');
   if (!row) return;
   if (state.kind === 'error') {
-    row.innerHTML = `<div style="font-size:12px; color:var(--muted);">⚠ Couldn't refresh status (${esc(state.error)}). Check the admin center.</div>`;
+    row.innerHTML = `<div style="font-size:12px; color:var(--muted);"><i class="ph ph-warning" aria-hidden="true"></i> Couldn't refresh status (${esc(state.error)}). Check the admin center.</div>`;
     return;
   }
   const req = state.request || {};
@@ -2618,15 +2624,15 @@ function renderApprovalStatusRow(state) {
   const lastMod = req.lastModifiedDateTime ? new Date(req.lastModifiedDateTime).toLocaleString() : '';
   let html = '';
   if (status === 'needsapproval' || status === 'pending' || status === '') {
-    html = `<div class="notice-banner" style="background:#fff8e6; border-color:#f0d090; color:#704500;">⏳ <strong>Pending approval.</strong> Polling every 30 s…</div>`;
+    html = `<div class="notice-banner" style="background:var(--watch-bg); border-color:var(--watch-border); color:var(--watch-ink);"><i class="ph ph-hourglass" aria-hidden="true"></i> <strong>Pending approval.</strong> Polling every 30 s…</div>`;
   } else if (status === 'approved' || status === 'completed') {
-    html = `<div class="notice-banner">✓ <strong>${esc(status === 'completed' ? 'Completed' : 'Approved')}${approverName ? ' by ' + esc(approverName) : ''}.</strong> ${status === 'completed' ? 'The delete has finished.' : 'Intune is executing the delete now.'}${approvalJust ? `<br><em>Approver note:</em> ${esc(approvalJust)}` : ''}${lastMod ? `<br><span style="font-size:11px; color:var(--ink-2);">${esc(lastMod)}</span>` : ''}</div>`;
+    html = `<div class="notice-banner"><i class="ph ph-check" aria-hidden="true"></i> <strong>${esc(status === 'completed' ? 'Completed' : 'Approved')}${approverName ? ' by ' + esc(approverName) : ''}.</strong> ${status === 'completed' ? 'The delete has finished.' : 'Intune is executing the delete now.'}${approvalJust ? `<br><em>Approver note:</em> ${esc(approvalJust)}` : ''}${lastMod ? `<br><span style="font-size:11px; color:var(--ink-2);">${esc(lastMod)}</span>` : ''}</div>`;
     // Auto-refresh the picker so the deleted app disappears.
     if (typeof loadInstalledApps === 'function') loadInstalledApps();
   } else if (status === 'rejected') {
-    html = `<div class="error-banner">✗ <strong>Rejected${approverName ? ' by ' + esc(approverName) : ''}.</strong>${approvalJust ? `<br><em>Reason:</em> ${esc(approvalJust)}` : ''}${lastMod ? `<br><span style="font-size:11px;">${esc(lastMod)}</span>` : ''}</div>`;
+    html = `<div class="error-banner"><i class="ph ph-x" aria-hidden="true"></i> <strong>Rejected${approverName ? ' by ' + esc(approverName) : ''}.</strong>${approvalJust ? `<br><em>Reason:</em> ${esc(approvalJust)}` : ''}${lastMod ? `<br><span style="font-size:11px;">${esc(lastMod)}</span>` : ''}</div>`;
   } else if (status === 'cancelled' || status === 'expired') {
-    html = `<div class="error-banner" style="background:#fff7e6; border-color:#f0d090; color:#704500;">⊘ <strong>${esc(status[0].toUpperCase() + status.slice(1))}.</strong>${lastMod ? `<br><span style="font-size:11px;">${esc(lastMod)}</span>` : ''}</div>`;
+    html = `<div class="error-banner" style="background:var(--watch-bg); border-color:var(--watch-border); color:var(--watch-ink);"><i class="ph ph-prohibit" aria-hidden="true"></i> <strong>${esc(status[0].toUpperCase() + status.slice(1))}.</strong>${lastMod ? `<br><span style="font-size:11px;">${esc(lastMod)}</span>` : ''}</div>`;
   } else {
     html = `<div style="font-size:12px; color:var(--muted);">Status: ${esc(status)}</div>`;
   }
@@ -2720,18 +2726,18 @@ function renderApprovalSubmitted(app, code, alreadyPending, notification) {
     : 'Approval request submitted.';
   let notifBlock = '';
   if (notification?.status === 'sent') {
-    notifBlock = `<div class="notice-banner" style="margin-top:16px;">✓ Notified ${esc(notification.approvers.join(', '))}.</div>`;
+    notifBlock = `<div class="notice-banner" style="margin-top:16px;"><i class="ph ph-check" aria-hidden="true"></i> Notified ${esc(notification.approvers.join(', '))}.</div>`;
   } else if (notification?.status === 'failed') {
     const hint = friendlyMailError(notification.error || '');
-    notifBlock = `<div class="error-banner" style="background:#fff7e6; border-color:#f0d090; color:#704500; margin-top:16px;">⚠ Email notification failed: ${esc(hint || notification.error)}${hint ? `<br><span style="font-size:11px;">${esc(notification.error)}</span>` : ''}<br>Notify ${esc(notification.approvers.join(', '))} manually.</div>`;
+    notifBlock = `<div class="error-banner" style="background:var(--watch-bg); border-color:var(--watch-border); color:var(--watch-ink); margin-top:16px;"><i class="ph ph-warning" aria-hidden="true"></i> Email notification failed: ${esc(hint || notification.error)}${hint ? `<br><span style="font-size:11px;">${esc(notification.error)}</span>` : ''}<br>Notify ${esc(notification.approvers.join(', '))} manually.</div>`;
   } else if (notification?.status === 'nomatch') {
-    notifBlock = `<div class="error-banner" style="background:#fff7e6; border-color:#f0d090; color:#704500; margin-top:16px;">⚠ No notification sent: the signed-in account (${esc(notification.upn)}) doesn't match any customer's login email, so the dashboard couldn't pick an approver list. Fix the customer's login email in Settings → Customers, then use ✉ Send test to verify.</div>`;
+    notifBlock = `<div class="error-banner" style="background:var(--watch-bg); border-color:var(--watch-border); color:var(--watch-ink); margin-top:16px;"><i class="ph ph-warning" aria-hidden="true"></i> No notification sent: the signed-in account (${esc(notification.upn)}) doesn't match any customer's login email, so the dashboard couldn't pick an approver list. Fix the customer's login email in Settings → Customers, then use <i class="ph ph-envelope" aria-hidden="true"></i> Send test to verify.</div>`;
   } else {
     notifBlock = `<p style="margin-top:16px; color:var(--muted); font-size:12px;">No approvers configured for this customer — set them in Settings → Customers to auto-notify on future submissions.</p>`;
   }
   $('delBody').innerHTML = `
     <div class="notice-banner" style="margin-top:0;">
-      <strong>✓ ${esc(heading)}</strong> This tenant has multi-admin approval enabled for app deletion. The dashboard's part is done — an approver needs to take it from here.
+      <strong><i class="ph ph-check" aria-hidden="true"></i> ${esc(heading)}</strong> This tenant has multi-admin approval enabled for app deletion. The dashboard's part is done — an approver needs to take it from here.
     </div>
     ${code ? `
       <p style="margin-top:16px; margin-bottom:6px;"><strong>Approval code:</strong></p>
@@ -2946,7 +2952,7 @@ function renderAnalysis(text, opts) {
   const badge = opts.cached
     ? `<span style="display:inline-block; font-size:11px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; color:var(--muted); border:1px solid var(--line); padding:3px 8px; border-radius:4px;">Cached · ${new Date(opts.cachedAt).toLocaleDateString()}</span>`
     : `<span style="display:inline-block; font-size:11px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; color:var(--accent); border:1px solid var(--line); padding:3px 8px; border-radius:4px;">Fresh</span>`;
-  const reanalyzeBtn = `<button id="reanalyzeBtn" style="font-size:12px; padding:4px 10px; border:1px solid var(--line); background:transparent; color:var(--muted); border-radius:4px; cursor:pointer;">↻ Re-analyze</button>`;
+  const reanalyzeBtn = `<button id="reanalyzeBtn" style="font-size:12px; padding:4px 10px; border:1px solid var(--line); background:transparent; color:var(--muted); border-radius:4px; cursor:pointer;"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Re-analyze</button>`;
   $('mBody').innerHTML = `
     <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px;">${badge}${reanalyzeBtn}</div>
     <div style="padding:0; line-height:1.6;">${html}</div>`;
@@ -3651,7 +3657,7 @@ function renderHardware() {
           ${freeCell}
           <td>${esc(d.osVersion)}</td>
           <td class="date">${esc(fmtIntuneDate(d.lastSync))}</td>
-          <td style="white-space:nowrap;"><span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:12px;" data-audit-device="${esc(d.id)}" data-audit-name="${esc(d.deviceName)}" title="Show recent admin actions on this device">📋 History</span> <span style="color:var(--line);">·</span> <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:12px;" data-ime-checkin="${esc(d.id)}" data-ime-name="${esc(d.deviceName)}" title="Force an IME required-app check-in on this device (on-demand)">⚡ Check-in</span></td>
+          <td style="white-space:nowrap;"><span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:12px;" data-audit-device="${esc(d.id)}" data-audit-name="${esc(d.deviceName)}" title="Show recent admin actions on this device"><i class="ph ph-clipboard-text" aria-hidden="true"></i> History</span> <span style="color:var(--line);">·</span> <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:12px;" data-ime-checkin="${esc(d.id)}" data-ime-name="${esc(d.deviceName)}" title="Force an IME required-app check-in on this device (on-demand)"><i class="ph ph-lightning" aria-hidden="true"></i> Check-in</span></td>
         </tr>`;
     }).join('');
 
@@ -3664,10 +3670,10 @@ function renderHardware() {
   document.querySelectorAll('#intuneSubHardware thead th').forEach(th => {
     th.classList.remove('sort-asc', 'sort-desc');
     const arrow = th.querySelector('.arrow');
-    if (arrow) arrow.textContent = '▼';
+    if (arrow) setSortArrow(arrow, 'desc');
     if (th.dataset.sort === hwSortKey) {
       th.classList.add(hwSortDir === 'asc' ? 'sort-asc' : 'sort-desc');
-      if (arrow) arrow.textContent = hwSortDir === 'asc' ? '▲' : '▼';
+      if (arrow) setSortArrow(arrow, hwSortDir);
     }
   });
 }
@@ -3751,7 +3757,7 @@ function renderSoftdeleted() {
           <td class="date">${esc(fmtIntuneDate(d.deletedAt))}</td>
           ${daysCell}
           <td>${d.accountEnabled ? 'Yes' : 'No'}</td>
-          <td><button class="btn" data-restore-id="${esc(d.id)}" data-restore-name="${esc(d.displayName)}">↻ Restore</button></td>
+          <td><button class="btn" data-restore-id="${esc(d.id)}" data-restore-name="${esc(d.displayName)}"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Restore</button></td>
         </tr>`;
     }).join('');
     tbody.querySelectorAll('[data-restore-id]').forEach(btn => {
@@ -3960,9 +3966,9 @@ function renderAuditResults() {
       const ip = actor.ipAddress ? `<br><span class="meta" style="font-size:11px;">from ${esc(actor.ipAddress)}</span>` : '';
       const result = (e.activityResult || '').toLowerCase();
       const resultBadge = result === 'success'
-        ? `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:#e7f6ec; border:1px solid #a7d7b5; color:#1f5d33;">${esc(e.activityResult)}</span>`
+        ? `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:var(--good-bg); border:1px solid var(--good-border); color:var(--good-ink);">${esc(e.activityResult)}</span>`
         : (result === 'failure' || result === 'fail')
-          ? `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:#fdecec; border:1px solid #f5b5b5; color:#8a2020;">${esc(e.activityResult)}</span>`
+          ? `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:var(--bad-bg); border:1px solid var(--bad-border); color:var(--bad-ink);">${esc(e.activityResult)}</span>`
           : esc(e.activityResult || '—');
       return `
         <tr>
@@ -4058,9 +4064,9 @@ function defenderInventoryUrl(row) {
 // Security Reader is the least-privilege read-only alternative.
 function hunting403Html(e) {
   if (/Missing user permissions/i.test(e.message || '')) {
-    return `<div class="error-banner">⚠ <strong>Defender security role required.</strong> Advanced hunting checks the signed-in <em>user's</em> Defender XDR permissions on top of the app's <code>ThreatHunting.Read.All</code> scope — even a Global Administrator gets this 403 without one. Assign yourself the <strong>Security Administrator</strong> Entra role (or <strong>Security Reader</strong> for read-only), wait a few minutes for it to propagate, then sign out and back in.<br><span style="font-size:12px; color:var(--muted);">${esc(e.message || String(e))}</span></div>`;
+    return `<div class="error-banner"><i class="ph ph-warning" aria-hidden="true"></i> <strong>Defender security role required.</strong> Advanced hunting checks the signed-in <em>user's</em> Defender XDR permissions on top of the app's <code>ThreatHunting.Read.All</code> scope — even a Global Administrator gets this 403 without one. Assign yourself the <strong>Security Administrator</strong> Entra role (or <strong>Security Reader</strong> for read-only), wait a few minutes for it to propagate, then sign out and back in.<br><span style="font-size:12px; color:var(--muted);">${esc(e.message || String(e))}</span></div>`;
   }
-  return `<div class="error-banner">⚠ <strong>403 from Graph.</strong> ${esc(e.message || String(e))}<br>Likely causes: the tenant isn't licensed for Defender for Endpoint P2 / M365 E5 (required for advanced hunting), admin consent for <code>ThreatHunting.Read.All</code> hasn't been granted yet (sign out and back in to re-consent), or the signed-in user lacks a Defender security role (Security Administrator / Security Reader).</div>`;
+  return `<div class="error-banner"><i class="ph ph-warning" aria-hidden="true"></i> <strong>403 from Graph.</strong> ${esc(e.message || String(e))}<br>Likely causes: the tenant isn't licensed for Defender for Endpoint P2 / M365 E5 (required for advanced hunting), admin consent for <code>ThreatHunting.Read.All</code> hasn't been granted yet (sign out and back in to re-consent), or the signed-in user lacks a Defender security role (Security Administrator / Security Reader).</div>`;
 }
 
 async function loadVulnerabilities(force = false) {
@@ -4617,7 +4623,7 @@ async function loadMetering(force = false) {
       // Surface the explanation as a one-shot banner at the top of the
       // wizard. Lives in meteringError (cleared on next loadMetering call),
       // not meteringEmpty (whose HTML is static and owns the deploy button).
-      $('meteringError').innerHTML = `<div class="notice-banner" style="margin-bottom:14px;">The previously-configured metering script (<code>${esc(scriptId)}</code>) was not found in Intune — it looks like it was deleted. Local state has been cleared; click <strong>⚡ Auto-deploy script…</strong> below to redeploy.</div>`;
+      $('meteringError').innerHTML = `<div class="notice-banner" style="margin-bottom:14px;">The previously-configured metering script (<code>${esc(scriptId)}</code>) was not found in Intune — it looks like it was deleted. Local state has been cleared; click <strong><i class="ph ph-lightning" aria-hidden="true"></i> Auto-deploy script…</strong> below to redeploy.</div>`;
       // Visually float the notice above the wizard so cause precedes effect.
       const empty = $('meteringEmpty');
       empty.parentNode.insertBefore($('meteringError'), empty);
@@ -4627,7 +4633,7 @@ async function loadMetering(force = false) {
       // Include an escape-hatch redeploy button so a transient Graph error
       // (or a deleted script that returns something other than 404) doesn't
       // strand the user on a banner with no recovery path.
-      $('meteringError').innerHTML = `<div class="error-banner">Failed to load metering data: ${esc(e.message || String(e))} <button class="btn" style="margin-left:12px; padding:4px 10px; font-size:12px;" onclick="openMeteringDeployModal()">⚡ Redeploy script…</button></div>`;
+      $('meteringError').innerHTML = `<div class="error-banner">Failed to load metering data: ${esc(e.message || String(e))} <button class="btn" style="margin-left:12px; padding:4px 10px; font-size:12px;" onclick="openMeteringDeployModal()"><i class="ph ph-lightning" aria-hidden="true"></i> Redeploy script…</button></div>`;
     }
   } finally {
     meteringLoading = false;
@@ -5006,7 +5012,7 @@ document.querySelectorAll('[data-sort-metering-drill]').forEach(th => {
 // catalog's app packages by normalized product name, counts how many
 // versions/packages exist per app, and flags packages older than the
 // newest (surplus) and packages assigned to no group (unassigned) —
-// the PatchMyPC-style cleanup targets. Inline 🗑 reuses the existing
+// the PatchMyPC-style cleanup targets. Inline delete reuses the existing
 // typed-confirm Delete-from-Intune flow (openDeleteModal), which is
 // multi-admin-approval aware. Read path rides DeviceManagementApps.
 // Read.All (already granted at sign-in); delete requests the ReadWrite
@@ -5199,7 +5205,7 @@ function sortAppverRows() {
 }
 
 function appverVerCell(n) {
-  const color = n >= 10 ? '#8a2020' : n >= 5 ? '#704500' : n >= 2 ? 'var(--ink)' : 'var(--muted)';
+  const color = n >= 10 ? 'var(--bad-ink)' : n >= 5 ? 'var(--watch-ink)' : n >= 2 ? 'var(--ink)' : 'var(--muted)';
   const weight = n >= 2 ? '700' : '400';
   return `<td style="color:${color}; font-weight:${weight};">${n}</td>`;
 }
@@ -5273,11 +5279,11 @@ function renderAppverDrillRows() {
   $('appverDrillCount').textContent = a.packages.length;
   $('appverDrillRows').innerHTML = a.packages.map(p => {
     const verCell = p.isNewest
-      ? `<td class="version"><strong>${esc(p.version) || '—'}</strong> <span style="color:#1f7a3a; font-weight:700; font-size:11px;">✓ newest</span></td>`
-      : `<td class="version">${esc(p.version) || '—'} <span style="color:#8a2020; font-size:11px;">old</span></td>`;
+      ? `<td class="version"><strong>${esc(p.version) || '—'}</strong> <span style="color:#1f7a3a; font-weight:700; font-size:11px;"><i class="ph ph-check" aria-hidden="true"></i> newest</span></td>`
+      : `<td class="version">${esc(p.version) || '—'} <span style="color:var(--bad-ink); font-size:11px;">old</span></td>`;
     const assignCell = p.assigned
       ? `<td>${esc(p.intents.join(', ')) || 'Assigned'}</td>`
-      : `<td style="color:#8a2020; font-weight:600;">Unassigned</td>`;
+      : `<td style="color:var(--bad-ink); font-weight:600;">Unassigned</td>`;
     const url = `https://intune.microsoft.com/#view/Microsoft_Intune_Apps/SettingsMenu/~/0/appId/${encodeURIComponent(p.id)}`;
     return `<tr>
       <td><input type="checkbox" data-apv-select="${esc(p.id)}" ${apvSelected.has(p.id) ? 'checked' : ''}></td>
@@ -5286,7 +5292,7 @@ function renderAppverDrillRows() {
       <td class="date">${esc(fmtIntuneDate(p.created))}</td>
       <td style="white-space:nowrap;">
         <a href="${url}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none; font-weight:600; font-size:12px;">Open ↗</a>
-        <span class="appver-del" data-appver-pkg="${esc(p.id)}" title="Delete this package from Intune" style="cursor:pointer; color:#8a2020; font-weight:700; font-size:13px; margin-left:10px;">🗑</span>
+        <span class="appver-del" data-appver-pkg="${esc(p.id)}" title="Delete this package from Intune" style="cursor:pointer; color:var(--bad-ink); font-weight:700; font-size:13px; margin-left:10px;"><i class="ph ph-trash" aria-hidden="true"></i></span>
       </td>
     </tr>`;
   }).join('');
@@ -5296,7 +5302,7 @@ function renderAppverDrillRows() {
   sa.indeterminate = selCount > 0 && selCount < a.packages.length;
   const btn = $('btnAppverDeleteSel');
   btn.style.display = selCount ? '' : 'none';
-  btn.textContent = `🗑 Delete Selected (${selCount})`;
+  btn.textContent = `<i class="ph ph-trash" aria-hidden="true"></i> Delete Selected (${selCount})`;
 }
 
 function exportAppverCSV() {
@@ -5415,7 +5421,7 @@ async function deleteSelectedAppverPackages() {
   const deleted = [], queued = [], failed = [];
   for (let i = 0; i < targets.length; i++) {
     const p = targets[i];
-    btn.textContent = `🗑 Deleting ${i + 1}/${targets.length}…`;
+    btn.textContent = `<i class="ph ph-trash" aria-hidden="true"></i> Deleting ${i + 1}/${targets.length}…`;
     const attempt = (headers = {}) => graphDelete('beta/deviceAppManagement/mobileApps/' + encodeURIComponent(p.id), { token, headers });
     try {
       await attempt(maaJustB64 ? { 'x-msft-approval-justification': maaJustB64 } : {});
@@ -5480,9 +5486,9 @@ async function deleteSelectedAppverPackages() {
   const label = p => `${p.displayName}${p.version ? ' ' + p.version : ''}`;
   const skipped = targets.length - deleted.length - queued.length - failed.length;
   const parts = [];
-  if (deleted.length) parts.push(`✓ Deleted ${deleted.length}: ${deleted.map(label).join(', ')}`);
-  if (queued.length) parts.push(`⏳ ${queued.length} submitted for Multi-Admin Approval — approve under Tenant administration → Multi Admin Approval: ${queued.map(label).join(', ')}`);
-  if (failed.length) parts.push(`✗ ${failed.length} failed: ${failed.map(f => `${label(f.p)} (${f.error})`).join('; ')}`);
+  if (deleted.length) parts.push(`<i class="ph ph-check" aria-hidden="true"></i> Deleted ${deleted.length}: ${deleted.map(label).join(', ')}`);
+  if (queued.length) parts.push(`<i class="ph ph-hourglass" aria-hidden="true"></i> ${queued.length} submitted for Multi-Admin Approval — approve under Tenant administration → Multi Admin Approval: ${queued.map(label).join(', ')}`);
+  if (failed.length) parts.push(`<i class="ph ph-x" aria-hidden="true"></i> ${failed.length} failed: ${failed.map(f => `${label(f.p)} (${f.error})`).join('; ')}`);
   if (skipped > 0) parts.push(`${cancelled ? 'Justification cancelled — ' : ''}${skipped} package${skipped === 1 ? '' : 's'} not attempted.`);
   const cls = (failed.length || cancelled) ? 'error-banner' : 'notice-banner';
 
@@ -5754,7 +5760,7 @@ async function onRestoreClick(btn) {
       $('sdRows').innerHTML = '<tr><td colspan="8" class="empty">No soft-deleted devices. Anything deleted in the last 30 days will appear here.</td></tr>';
     }
     $('sdNotice').innerHTML =
-      `<div class="notice-banner">✓ Restored <strong>${esc(name)}</strong>. It should reappear in Entra and re-link to its Intune managed-device record within a few minutes.</div>`;
+      `<div class="notice-banner"><i class="ph ph-check" aria-hidden="true"></i> Restored <strong>${esc(name)}</strong>. It should reappear in Entra and re-link to its Intune managed-device record within a few minutes.</div>`;
     setTimeout(() => { const n = $('sdNotice'); if (n) n.innerHTML = ''; }, 8000);
   } catch (e) {
     btn.disabled = false;
@@ -5948,7 +5954,7 @@ function saveMeteringScriptIdToActiveCustomer(scriptId, idField) {
 
 function showMeteringDeployedBanner(scriptId, target) {
   const cfg = MD_MODES[mdMode];
-  $(cfg.bannerEl).innerHTML = `<div class="notice-banner" style="margin-bottom:14px;">✓ Deployed ${esc(cfg.label)} (ID: <code>${esc(scriptId)}</code>) to <strong>${esc(target)}</strong>. Devices will run it on the next Intune sync; data will appear here as soon as the first device check-in cycle completes (typically within 24 hours).</div>`;
+  $(cfg.bannerEl).innerHTML = `<div class="notice-banner" style="margin-bottom:14px;"><i class="ph ph-check" aria-hidden="true"></i> Deployed ${esc(cfg.label)} (ID: <code>${esc(scriptId)}</code>) to <strong>${esc(target)}</strong>. Devices will run it on the next Intune sync; data will appear here as soon as the first device check-in cycle completes (typically within 24 hours).</div>`;
 }
 
 $('btnMeteringDeploy').addEventListener('click', () => openMeteringDeployModal('metering'));
@@ -5985,7 +5991,7 @@ $('meteringDeployModal').addEventListener('click', e => {
 // run, store its ID per customer (imeCheckinScriptId), and from then
 // on every check-in just points the existing remediation at the
 // chosen device. Devices are chosen via the picker in the Remediation
-// tab or the per-row "⚡ Check-in" buttons (Hardware/Failed/Cert).
+// tab or the per-row Check-in buttons (Hardware/Failed/Cert).
 // https://github.com/call4cloud-code/Required-App-Checkin-public
 // ============================================================
 const IME_DETECT_PATH = 'scripts/ime-required-app-checkin-detect.ps1';
@@ -6076,9 +6082,9 @@ async function loadImeRunActivity(force) {
     const total = states.length;
     const lastRun = states.reduce((m, s) => (s.lastStateUpdateDateTime && s.lastStateUpdateDateTime > m) ? s.lastStateUpdateDateTime : m, '');
     const errs = states.filter(s => ['remediationFailed', 'scriptError', 'fail'].includes(s.remediationState) || s.remediationScriptError).length;
-    el.innerHTML = `⚙ Run on <strong>${total}</strong> device${total === 1 ? '' : 's'} on-demand`
+    el.innerHTML = `<i class="ph ph-gear" aria-hidden="true"></i> Run on <strong>${total}</strong> device${total === 1 ? '' : 's'} on-demand`
       + (lastRun ? ` · last ${new Date(lastRun).toLocaleString()}` : '')
-      + (errs ? ` · <span style="color:#8a2020;">${errs} with remediation errors</span>` : '');
+      + (errs ? ` · <span style="color:var(--bad-ink);">${errs} with remediation errors</span>` : '');
   } catch (e) {
     el.textContent = '';
     imeActivityScriptId = null; // allow retry next render
@@ -6210,7 +6216,7 @@ async function ensureImeRemediation() {
         try {
           await imeWrite(h => graphPatch(`beta/deviceManagement/deviceHealthScripts/${encodeURIComponent(storedId)}`, imeScriptBody(), { headers: h, token: writeToken }));
           saveImeScriptVersionToActiveCustomer(localVersion);
-          imeToast('↻ Updated the IME remediation script in this tenant to the latest version.', 'ok');
+          imeToast('<i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Updated the IME remediation script in this tenant to the latest version.', 'ok');
           remediationLoaded = false;
           if (typeof loadRemediation === 'function') loadRemediation(true);
           return storedId;
@@ -6255,7 +6261,7 @@ function ensurePrivilegedOpsToken() {
 
 // Run an on-demand IME required-app check-in on one chosen device. Auto-creates
 // the (unassigned) remediation on first use. Used by the Remediation-tab picker
-// and the per-row "⚡ Check-in" buttons (Hardware / Failed Install) plus the
+// and the per-row Check-in buttons (Hardware / Failed Install) plus the
 // Management health tab's Health Assessment panel.
 async function forceImeCheckin(deviceId, deviceName, triggerEl) {
   if (!deviceId) { imeToast('This row has no Intune device ID, so on-demand check-in is unavailable.', 'bad'); return; }
@@ -6275,7 +6281,7 @@ async function forceImeCheckin(deviceId, deviceName, triggerEl) {
   // ensureImeRemediation() would otherwise burn (→ popup_window_error). After
   // first consent this resolves silently, so the confirm still comes first on
   // every subsequent run.
-  setBusy('⏳ …');
+  setBusy('<i class="ph ph-hourglass" aria-hidden="true"></i> …');
   let token;
   try {
     token = await ensurePrivilegedOpsToken();
@@ -6284,7 +6290,7 @@ async function forceImeCheckin(deviceId, deviceName, triggerEl) {
     restore();
     const popupBlocked = /popup/i.test(e.message || '') || e.errorCode === 'popup_window_error';
     imeToast(popupBlocked
-      ? `Sign-in popup was blocked by the browser. Allow popups for this site, then click ⚡ Check-in again.`
+      ? `Sign-in popup was blocked by the browser. Allow popups for this site, then click <i class="ph ph-lightning" aria-hidden="true"></i> Check-in again.`
       : `Consent failed: ${e.message || e}`, 'bad');
     return;
   }
@@ -6304,13 +6310,13 @@ async function forceImeCheckin(deviceId, deviceName, triggerEl) {
     // A just-created remediation can take a few seconds to propagate to the
     // device-side service, which 404s until it lands. Retry once after a pause.
     if (res.status === 404) {
-      setBusy('⏳ retrying…');
+      setBusy('<i class="ph ph-hourglass" aria-hidden="true"></i> retrying…');
       await new Promise(r => setTimeout(r, 5000));
       res = await runOnce();
     }
     if (!res.ok && res.status !== 204) { const t = await res.text(); const err = new Error('Graph ' + res.status + ': ' + t); err.status = res.status; throw err; }
-    imeToast(`✓ Check-in sent to ${label}. If the device is online it runs within ~10s; results report back shortly.`, 'ok');
-    if (triggerEl) { triggerEl.textContent = '✓ Sent'; setTimeout(restore, 4000); }
+    imeToast(`<i class="ph ph-check" aria-hidden="true"></i> Check-in sent to ${label}. If the device is online it runs within ~10s; results report back shortly.`, 'ok');
+    if (triggerEl) { triggerEl.textContent = '<i class="ph ph-check" aria-hidden="true"></i> Sent'; setTimeout(restore, 4000); }
     loadImeRunActivity(true); // results lag a few minutes, but refresh so the count catches up
 
   } catch (e) {
@@ -6324,7 +6330,7 @@ async function forceImeCheckin(deviceId, deviceName, triggerEl) {
   }
 }
 
-// Delegated handler for every per-row "⚡ Check-in" affordance across the device tabs.
+// Delegated handler for every per-row Check-in affordance across the device tabs.
 document.addEventListener('click', e => {
   const el = e.target.closest && e.target.closest('[data-ime-checkin]');
   if (!el) return;
@@ -6435,14 +6441,14 @@ function approvalType(r) {
 function approvalStatusBadge(status) {
   const s = (status || '').toLowerCase();
   const map = {
-    needsapproval: { label: 'Pending', bg: '#fff8e6', border: '#f0d090', color: '#704500' },
-    approved:      { label: 'Needs completion', bg: '#e7f6ec', border: '#a7d7b5', color: '#1f5d33' },
-    completed:     { label: 'Completed', bg: '#e7f6ec', border: '#a7d7b5', color: '#1f5d33' },
-    rejected:      { label: 'Rejected', bg: '#fdecec', border: '#f5b5b5', color: '#8a2020' },
-    cancelled:     { label: 'Cancelled', bg: '#f5f1ea', border: '#ece8e1', color: '#4a4a4f' },
-    expired:       { label: 'Expired', bg: '#f5f1ea', border: '#ece8e1', color: '#4a4a4f' }
+    needsapproval: { label: 'Pending', bg: 'var(--watch-bg)', border: 'var(--watch-border)', color: 'var(--watch-ink)' },
+    approved:      { label: 'Needs completion', bg: 'var(--good-bg)', border: 'var(--good-border)', color: 'var(--good-ink)' },
+    completed:     { label: 'Completed', bg: 'var(--good-bg)', border: 'var(--good-border)', color: 'var(--good-ink)' },
+    rejected:      { label: 'Rejected', bg: 'var(--bad-bg)', border: 'var(--bad-border)', color: 'var(--bad-ink)' },
+    cancelled:     { label: 'Cancelled', bg: 'var(--surface-muted)', border: 'var(--line)', color: 'var(--ink-2)' },
+    expired:       { label: 'Expired', bg: 'var(--surface-muted)', border: 'var(--line)', color: 'var(--ink-2)' }
   };
-  const m = map[s] || { label: status || '—', bg: '#f5f1ea', border: '#ece8e1', color: '#4a4a4f' };
+  const m = map[s] || { label: status || '—', bg: 'var(--surface-muted)', border: 'var(--line)', color: 'var(--ink-2)' };
   return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:${m.bg}; border:1px solid ${m.border}; color:${m.color};">${esc(m.label)}</span>`;
 }
 
@@ -6617,7 +6623,7 @@ function renderApprovalsTable() {
       const actions = isPending
         ? `<button class="btn" data-approve="${esc(r.id)}" style="padding:4px 10px; font-size:11px; margin-right:4px;">Approve</button><button class="btn btn-danger" data-reject="${esc(r.id)}" style="padding:4px 10px; font-size:11px; margin-right:4px;">Reject</button><button class="btn btn-ghost" data-cancel-approval="${esc(r.id)}" style="padding:4px 10px; font-size:11px;">Cancel</button>`
         : isApproved
-        ? `<button class="btn" data-complete-approval="${esc(r.id)}" style="padding:4px 10px; font-size:11px; margin-right:4px; background:#1f5d33; border-color:#1f5d33;">Complete</button><button class="btn btn-ghost" data-approval-details="${esc(r.id)}" style="padding:4px 10px; font-size:11px;">Details</button>`
+        ? `<button class="btn" data-complete-approval="${esc(r.id)}" style="padding:4px 10px; font-size:11px; margin-right:4px; background:var(--good-ink); border-color:var(--good-ink);">Complete</button><button class="btn btn-ghost" data-approval-details="${esc(r.id)}" style="padding:4px 10px; font-size:11px;">Details</button>`
         : `<button class="btn btn-ghost" data-approval-details="${esc(r.id)}" style="padding:4px 10px; font-size:11px;">Details</button>`;
       return `
         <tr>
@@ -6769,10 +6775,10 @@ function openApprovalActionModal(id, action) {
   const req = approvalsRaw.find(r => r.id === id);
   if (!req) return;
   const META = {
-    approve:   { title: 'Approve request',  desc: 'Approve this request? Intune will execute the operation as soon as approval is recorded.',           placeholder: 'e.g. Reviewed change ticket CHG-12345',                     btnClass: 'btn',           btnStyle: 'background:#1f5d33; border-color:#1f5d33;', label: 'Approve'          },
+    approve:   { title: 'Approve request',  desc: 'Approve this request? Intune will execute the operation as soon as approval is recorded.',           placeholder: 'e.g. Reviewed change ticket CHG-12345',                     btnClass: 'btn',           btnStyle: 'background:var(--good-ink); border-color:var(--good-ink);', label: 'Approve'          },
     reject:    { title: 'Reject request',   desc: 'Reject this request? The requester will see the rejection in their queue, and the operation will not run.', placeholder: 'e.g. Out of policy — see governance doc',                  btnClass: 'btn btn-danger', btnStyle: '',                                 label: 'Reject'           },
     cancel:    { title: 'Cancel request',   desc: 'Cancel this pending request? The request will be marked as cancelled and the operation will not run.',       placeholder: '', btnClass: 'btn btn-danger', btnStyle: '',                                 label: 'Cancel request', noJustification: true, noJustNote: 'No justification is required — the request will be cancelled in Intune.' },
-    complete:  { title: 'Complete request', desc: 'Re-execute the approved operation (wipe / retire / delete). Intune will carry out the action now that approval is granted.',  placeholder: '', btnClass: 'btn',           btnStyle: 'background:#1f5d33; border-color:#1f5d33;', label: 'Execute now',    noJustification: true, noJustNote: 'No justification is needed — Intune executes the operation using the recorded approval.' },
+    complete:  { title: 'Complete request', desc: 'Re-execute the approved operation (wipe / retire / delete). Intune will carry out the action now that approval is granted.',  placeholder: '', btnClass: 'btn',           btnStyle: 'background:var(--good-ink); border-color:var(--good-ink);', label: 'Execute now',    noJustification: true, noJustNote: 'No justification is needed — Intune executes the operation using the recorded approval.' },
   };
   const m = META[action] || META.approve;
   $('apaTitle').textContent = m.title;
@@ -6931,8 +6937,8 @@ async function bulkApprovalAction(action) {
   }
 
   const parts = [];
-  if (succeeded.length) parts.push(`✓ ${succeeded.length} ${{ approve: 'approved', reject: 'rejected', cancel: 'cancelled', complete: 'completed' }[action] || action}`);
-  if (failed.length) parts.push(`✗ ${failed.length} failed: ${failed.map(f => f.error).join('; ')}`);
+  if (succeeded.length) parts.push(`<i class="ph ph-check" aria-hidden="true"></i> ${succeeded.length} ${{ approve: 'approved', reject: 'rejected', cancel: 'cancelled', complete: 'completed' }[action] || action}`);
+  if (failed.length) parts.push(`<i class="ph ph-x" aria-hidden="true"></i> ${failed.length} failed: ${failed.map(f => f.error).join('; ')}`);
   const cls = failed.length ? 'error-banner' : 'notice-banner';
   $('approvalsError').innerHTML = parts.length ? `<div class="${cls}">${esc(parts.join(' · '))}</div>` : '';
   loadApprovals(true);
@@ -7287,10 +7293,10 @@ function bitlockerStateOf(r) {
 
 function bitlockerStateBadge(state) {
   const map = {
-    'gap':                { label: 'Gap', bg: '#fdecec', border: '#f5b5b5', color: '#8a2020' },
-    'encrypted-with-key': { label: 'OK', bg: '#e7f6ec', border: '#a7d7b5', color: '#1f5d33' },
-    'not-encrypted':      { label: 'Not encrypted', bg: '#fff8e6', border: '#f0d090', color: '#704500' },
-    'no-entra-link':      { label: 'No Entra link', bg: '#f5f1ea', border: '#ece8e1', color: '#4a4a4f' }
+    'gap':                { label: 'Gap', bg: 'var(--bad-bg)', border: 'var(--bad-border)', color: 'var(--bad-ink)' },
+    'encrypted-with-key': { label: 'OK', bg: 'var(--good-bg)', border: 'var(--good-border)', color: 'var(--good-ink)' },
+    'not-encrypted':      { label: 'Not encrypted', bg: 'var(--watch-bg)', border: 'var(--watch-border)', color: 'var(--watch-ink)' },
+    'no-entra-link':      { label: 'No Entra link', bg: 'var(--surface-muted)', border: 'var(--line)', color: 'var(--ink-2)' }
   };
   const m = map[state];
   return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:${m.bg}; border:1px solid ${m.border}; color:${m.color};">${esc(m.label)}</span>`;
@@ -7405,7 +7411,7 @@ function renderBitlockerTiles() {
     const display = (gap > 0 && rate >= 99.5) ? '99%' : Math.round(rate) + '%';
     $('blTileRate').textContent = display;
     // Color the percentage by health band: red <90, amber <99, green ≥99.
-    const color = rate < 90 ? '#8a2020' : (rate < 99 ? '#704500' : '#1f5d33');
+    const color = rate < 90 ? 'var(--bad-ink)' : (rate < 99 ? 'var(--watch-ink)' : 'var(--good-ink)');
     $('blTileRate').style.color = color;
     if (ring) {
       ring.style.strokeDashoffset = CIRC * (1 - rate / 100);
@@ -7615,10 +7621,10 @@ function dsFormatMB(mb) {
 // Color band for a given free-MB value — matches the dropdown bands.
 function dsColorForFreeMB(freeMB) {
   if (freeMB == null) return 'var(--muted)';
-  if (freeMB < 1024)  return '#8a2020'; // red — emergency
-  if (freeMB < 5120)  return '#704500'; // amber — at risk
+  if (freeMB < 1024)  return 'var(--bad-ink)'; // red — emergency
+  if (freeMB < 5120)  return 'var(--watch-ink)'; // amber — at risk
   if (freeMB < 20480) return '#7a5f1f'; // yellow — watch
-  return '#1f5d33';                     // green — healthy
+  return 'var(--good-ink)';                     // green — healthy
 }
 
 function renderDiskspaceTiles() {
@@ -7824,10 +7830,10 @@ function autopilotStateOf(r, hideHybrid) {
 
 function autopilotStateBadge(state) {
   const map = {
-    'orphan':    { label: 'Orphan',     bg: '#fdecec', border: '#f5b5b5', color: '#8a2020' },
-    'noProfile': { label: 'No profile', bg: '#fff8e6', border: '#f0d090', color: '#704500' },
-    'duplicate': { label: 'Duplicate',  bg: '#fff8e6', border: '#f0d090', color: '#704500' },
-    'ok':        { label: 'OK',         bg: '#e7f6ec', border: '#a7d7b5', color: '#1f5d33' }
+    'orphan':    { label: 'Orphan',     bg: 'var(--bad-bg)', border: 'var(--bad-border)', color: 'var(--bad-ink)' },
+    'noProfile': { label: 'No profile', bg: 'var(--watch-bg)', border: 'var(--watch-border)', color: 'var(--watch-ink)' },
+    'duplicate': { label: 'Duplicate',  bg: 'var(--watch-bg)', border: 'var(--watch-border)', color: 'var(--watch-ink)' },
+    'ok':        { label: 'OK',         bg: 'var(--good-bg)', border: 'var(--good-border)', color: 'var(--good-ink)' }
   };
   const m = map[state] || map['ok'];
   return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:${m.bg}; border:1px solid ${m.border}; color:${m.color};">${esc(m.label)}</span>`;
@@ -8032,7 +8038,7 @@ function renderAutopilotTable() {
     sa.checked = allOn;
     sa.indeterminate = selectedHere > 0 && !allOn;
     $('btnAutopilotSelectAll').textContent = allOn ? 'Clear selection' : 'Select all';
-    $('btnAutopilotDelete').textContent = selectedHere ? `🗑 Delete selected (${selectedHere})` : '🗑 Delete selected';
+    $('btnAutopilotDelete').textContent = selectedHere ? `<i class="ph ph-trash" aria-hidden="true"></i> Delete selected (${selectedHere})` : '<i class="ph ph-trash" aria-hidden="true"></i> Delete selected';
   }
 }
 
@@ -8077,7 +8083,7 @@ async function deleteSelectedAutopilotOrphans() {
   const deleted = [], queued = [], failed = [];
   for (let i = 0; i < targets.length; i++) {
     const r = targets[i];
-    btn.textContent = `🗑 Deleting ${i + 1}/${targets.length}…`;
+    btn.textContent = `<i class="ph ph-trash" aria-hidden="true"></i> Deleting ${i + 1}/${targets.length}…`;
     const attempt = (headers = {}) => graphDelete('beta/deviceManagement/windowsAutopilotDeviceIdentities/' + encodeURIComponent(r.id), { token, headers });
     try {
       await attempt(maaJustB64 ? { 'x-msft-approval-justification': maaJustB64 } : {});
@@ -8854,10 +8860,10 @@ function certhealthRiskOf(r) {
 
 function certhealthStateBadge(state, deviceId) {
   const map = {
-    'broken':  { label: '🔴 Failure likely', bg: '#fdecec', border: '#f5b5b5', color: '#8a2020' },
-    'atrisk':  { label: '🟠 At risk', bg: '#fff1e6', border: '#f0c090', color: '#7a3e00' },
-    'stale':   { label: '🟡 Stale', bg: '#fff8e6', border: '#f0d090', color: '#704500' },
-    'healthy': { label: '🟢 Healthy', bg: '#e7f6ec', border: '#a7d7b5', color: '#1f5d33' }
+    'broken':  { label: '<i class="ph-fill ph-circle ph-status-bad" aria-hidden="true"></i> Failure likely', bg: 'var(--bad-bg)', border: 'var(--bad-border)', color: 'var(--bad-ink)' },
+    'atrisk':  { label: '<i class="ph-fill ph-circle ph-status-warn" aria-hidden="true"></i> At risk', bg: 'var(--warn-bg)', border: 'var(--warn-border)', color: 'var(--warn-ink)' },
+    'stale':   { label: '<i class="ph-fill ph-circle ph-status-watch" aria-hidden="true"></i> Stale', bg: 'var(--watch-bg)', border: 'var(--watch-border)', color: 'var(--watch-ink)' },
+    'healthy': { label: '<i class="ph-fill ph-circle ph-status-good" aria-hidden="true"></i> Healthy', bg: 'var(--good-bg)', border: 'var(--good-border)', color: 'var(--good-ink)' }
   };
   const m = map[state] || map['healthy'];
   const click = deviceId ? ` data-ch-why="${esc(deviceId)}" title="Why? Click for the management assessment"` : '';
@@ -8866,9 +8872,9 @@ function certhealthStateBadge(state, deviceId) {
 
 function certhealthRiskBadge(risk) {
   const map = {
-    'high':   { label: 'High', bg: '#fdecec', border: '#f5b5b5', color: '#8a2020' },
-    'medium': { label: 'Medium', bg: '#fff1e6', border: '#f0c090', color: '#7a3e00' },
-    'low':    { label: 'Low', bg: '#fff8e6', border: '#f0d090', color: '#704500' }
+    'high':   { label: 'High', bg: 'var(--bad-bg)', border: 'var(--bad-border)', color: 'var(--bad-ink)' },
+    'medium': { label: 'Medium', bg: 'var(--warn-bg)', border: 'var(--warn-border)', color: 'var(--warn-ink)' },
+    'low':    { label: 'Low', bg: 'var(--watch-bg)', border: 'var(--watch-border)', color: 'var(--watch-ink)' }
   };
   const m = map[risk];
   if (!m) return '<span style="color:var(--muted);">—</span>';
@@ -8971,7 +8977,7 @@ function openChAssessModal(deviceId) {
       ${a.symptoms.length ? section('Likely symptoms', list(a.symptoms)) : ''}
       ${a.validate.length ? section('Recommended validation', list(a.validate)) : ''}
       ${a.remediate.length ? section('Recommended remediation', list(a.remediate)) : ''}
-      ${r.id ? `<div style="margin-top:16px;"><span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" data-ime-checkin="${esc(r.id)}" data-ime-name="${esc(r.deviceName || '')}" title="Force an IME required-app check-in on this device (on-demand) — a sync also lets certificate auto-renewal attempt to run">⚡ Force check-in / sync now</span></div>` : ''}
+      ${r.id ? `<div style="margin-top:16px;"><span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" data-ime-checkin="${esc(r.id)}" data-ime-name="${esc(r.deviceName || '')}" title="Force an IME required-app check-in on this device (on-demand) — a sync also lets certificate auto-renewal attempt to run"><i class="ph ph-lightning" aria-hidden="true"></i> Force check-in / sync now</span></div>` : ''}
     </div>`;
   $('chAssessModal').classList.add('show');
 }
@@ -9114,12 +9120,12 @@ function renderCerthealthTable() {
           <td>${deviceCell}</td>
           <td>${esc(r.userPrincipalName) || '—'}</td>
           <td>${esc(r.osVersion) || '—'}</td>
-          <td>${r.daysRemaining == null ? '—' : (r.daysRemaining < 0 ? `<span style="color:#8a2020; font-weight:600;">${r.daysRemaining}</span>` : r.daysRemaining)}</td>
+          <td>${r.daysRemaining == null ? '—' : (r.daysRemaining < 0 ? `<span style="color:var(--bad-ink); font-weight:600;">${r.daysRemaining}</span>` : r.daysRemaining)}</td>
           <td class="date">${r.managementCertificateExpirationDate ? new Date(r.managementCertificateExpirationDate).toLocaleString() : '—'}</td>
           <td>${r.daysSinceSync == null ? '—' : r.daysSinceSync}</td>
           <td>${certhealthRiskBadge(certhealthRiskOf(r))}</td>
           <td>${certhealthStateBadge(state, r.id)}</td>
-          <td style="white-space:nowrap;">${r.id ? `<span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:12px;" data-ch-why="${esc(r.id)}" title="Open the Health Assessment panel: classification, evidence, symptoms, validation and remediation steps">🔍 Investigate</span>` : '—'}</td>
+          <td style="white-space:nowrap;">${r.id ? `<span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:12px;" data-ch-why="${esc(r.id)}" title="Open the Health Assessment panel: classification, evidence, symptoms, validation and remediation steps"><i class="ph ph-magnifying-glass" aria-hidden="true"></i> Investigate</span>` : '—'}</td>
         </tr>
       `;
     }).join('');
@@ -9136,10 +9142,10 @@ function renderCerthealthTable() {
   const totalSel = certhealthRows.filter(r => chSelected.has(r.id)).length;
   const delBtn = $('btnCerthealthDelete');
   delBtn.style.display = totalSel ? '' : 'none';
-  delBtn.textContent = `🗑 Delete selected (${totalSel})`;
+  delBtn.textContent = `<i class="ph ph-trash" aria-hidden="true"></i> Delete selected (${totalSel})`;
   const wipeBtn = $('btnCerthealthWipe');
   wipeBtn.style.display = totalSel ? '' : 'none';
-  wipeBtn.textContent = `⚠ Wipe selected (${totalSel})`;
+  wipeBtn.textContent = `<i class="ph ph-warning" aria-hidden="true"></i> Wipe selected (${totalSel})`;
 }
 
 function buildMaaDeviceEmailHtml({ action, devices, account, upn, customer, maaJust }) {
@@ -9193,7 +9199,7 @@ async function deleteSelectedCerthealthDevices() {
   const deleted = [], queued = [], failed = [];
   for (let i = 0; i < targets.length; i++) {
     const r = targets[i];
-    btn.textContent = `🗑 Deleting ${i + 1}/${targets.length}…`;
+    btn.textContent = `<i class="ph ph-trash" aria-hidden="true"></i> Deleting ${i + 1}/${targets.length}…`;
     const attempt = (headers = {}) => graphDelete('beta/deviceManagement/managedDevices/' + encodeURIComponent(r.id), { token, headers });
     try {
       await attempt(maaJustB64 ? { 'x-msft-approval-justification': maaJustB64 } : {});
@@ -9228,9 +9234,9 @@ async function deleteSelectedCerthealthDevices() {
 
   const skipped = targets.length - deleted.length - queued.length - failed.length;
   const parts = [];
-  if (deleted.length) parts.push(`✓ Deleted ${deleted.length}: ${deleted.map(r => r.deviceName || r.id).join(', ')}`);
-  if (queued.length) parts.push(`⏳ ${queued.length} submitted for Multi-Admin Approval — approve under Tenant administration → Multi Admin Approval: ${queued.map(r => r.deviceName || r.id).join(', ')}`);
-  if (failed.length) parts.push(`✗ ${failed.length} failed: ${failed.map(f => `${f.r.deviceName || f.r.id} (${f.error})`).join('; ')}`);
+  if (deleted.length) parts.push(`<i class="ph ph-check" aria-hidden="true"></i> Deleted ${deleted.length}: ${deleted.map(r => r.deviceName || r.id).join(', ')}`);
+  if (queued.length) parts.push(`<i class="ph ph-hourglass" aria-hidden="true"></i> ${queued.length} submitted for Multi-Admin Approval — approve under Tenant administration → Multi Admin Approval: ${queued.map(r => r.deviceName || r.id).join(', ')}`);
+  if (failed.length) parts.push(`<i class="ph ph-x" aria-hidden="true"></i> ${failed.length} failed: ${failed.map(f => `${f.r.deviceName || f.r.id} (${f.error})`).join('; ')}`);
   if (skipped > 0) parts.push(`${cancelled ? 'Justification cancelled — ' : ''}${skipped} device${skipped === 1 ? '' : 's'} not attempted.`);
   const cls = (failed.length || cancelled) ? 'error-banner' : 'notice-banner';
   $('certhealthError').innerHTML = parts.length ? `<div class="${cls}">${parts.map(p => esc(p)).join('<br>')}</div>` : '';
@@ -9299,7 +9305,7 @@ async function wipeSelectedCerthealthDevices() {
   const succeeded = [], queued = [], failed = [];
   for (let i = 0; i < targets.length; i++) {
     const r = targets[i];
-    btn.textContent = `⚠ Wiping ${i + 1}/${targets.length}…`;
+    btn.textContent = `<i class="ph ph-warning" aria-hidden="true"></i> Wiping ${i + 1}/${targets.length}…`;
     const attempt = (extraHeaders = {}) => graphPost(
       'beta/deviceManagement/managedDevices/' + encodeURIComponent(r.id) + '/wipe',
       { keepEnrollmentData: false, keepUserData: false },
@@ -9336,9 +9342,9 @@ async function wipeSelectedCerthealthDevices() {
 
   const skipped = targets.length - succeeded.length - queued.length - failed.length;
   const parts = [];
-  if (succeeded.length) parts.push(`✓ Wipe issued to ${succeeded.length}: ${succeeded.map(r => r.deviceName || r.id).join(', ')}`);
-  if (queued.length) parts.push(`⏳ ${queued.length} submitted for Multi-Admin Approval — approve under Tenant administration → Multi Admin Approval: ${queued.map(r => r.deviceName || r.id).join(', ')}`);
-  if (failed.length) parts.push(`✗ ${failed.length} failed: ${failed.map(f => `${f.r.deviceName || f.r.id} (${f.error})`).join('; ')}`);
+  if (succeeded.length) parts.push(`<i class="ph ph-check" aria-hidden="true"></i> Wipe issued to ${succeeded.length}: ${succeeded.map(r => r.deviceName || r.id).join(', ')}`);
+  if (queued.length) parts.push(`<i class="ph ph-hourglass" aria-hidden="true"></i> ${queued.length} submitted for Multi-Admin Approval — approve under Tenant administration → Multi Admin Approval: ${queued.map(r => r.deviceName || r.id).join(', ')}`);
+  if (failed.length) parts.push(`<i class="ph ph-x" aria-hidden="true"></i> ${failed.length} failed: ${failed.map(f => `${f.r.deviceName || f.r.id} (${f.error})`).join('; ')}`);
   if (skipped > 0) parts.push(`${cancelled ? 'Justification cancelled — ' : ''}${skipped} device${skipped === 1 ? '' : 's'} not attempted.`);
   const cls = (failed.length || cancelled) ? 'error-banner' : 'notice-banner';
   $('certhealthError').innerHTML = parts.length ? `<div class="${cls}">${parts.map(p => esc(p)).join('<br>')}</div>` : '';
@@ -9388,7 +9394,7 @@ function exportCerthealthCsv() {
   URL.revokeObjectURL(url);
 }
 
-// Clickable health badge / 🔍 Investigate → open the Health Assessment panel
+// Clickable health badge / Investigate opens the Health Assessment panel
 $('certhealthRowsBody').addEventListener('click', e => {
   const el = e.target.closest('[data-ch-why]');
   if (el) openChAssessModal(el.dataset.chWhy);
@@ -9480,7 +9486,7 @@ function formatAssignmentsProgress(states) {
     const s = states[ep.key];
     if (!s || s.status === 'pending') return `${ep.label}…`;
     if (s.status === 'ok') return `${ep.label} ${s.count}`;
-    if (s.status === 'fail') return `${ep.label} ✕`;
+    if (s.status === 'fail') return `${ep.label} <i class="ph ph-x" aria-hidden="true"></i>`;
     return `${ep.label}…`;
   }).join(' · ');
 }
@@ -9699,7 +9705,7 @@ function renderAssignmentsForGroup() {
   };
 
   const exclTag = a => a.isExclusion
-    ? `<span style="display:inline-block; padding:1px 8px; border-radius:4px; font-size:11px; font-weight:600; background:#fcdede; color:#992020;">Excluded</span>`
+    ? `<span style="display:inline-block; padding:1px 8px; border-radius:4px; font-size:11px; font-weight:600; background:var(--bad-bg); color:var(--bad-ink);">Excluded</span>`
     : '—';
   const filterTag = a => a.filterId
     ? `<code style="font-size:11px;">${esc(a.filterId)}</code>`
@@ -10098,7 +10104,7 @@ function renderHygieneDetail(kind) {
       <div class="table-toolbar">
         <h2>${esc(title)}</h2>
         <div class="controls">
-          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" onclick="closeHygieneDetail()">✕ Close</span>
+          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" onclick="closeHygieneDetail()"><i class="ph ph-x" aria-hidden="true"></i> Close</span>
         </div>
       </div>
       ${tableHtml}
@@ -10546,7 +10552,7 @@ function renderPostureDetail(kind) {
       <div class="table-toolbar">
         <h2>${title}</h2>
         <div class="controls">
-          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnPostureDetailClose">✕ Close</span>
+          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnPostureDetailClose"><i class="ph ph-x" aria-hidden="true"></i> Close</span>
         </div>
       </div>
       ${tableHtml}
@@ -10977,7 +10983,7 @@ async function loadStaleUsers(force = false) {
 
     $('staleusersLoading').style.display = 'none';
     if (staleusersP1Gated) {
-      $('staleusersError').innerHTML = `<div class="error-banner">⚠ <strong>Entra ID P1/P2 required.</strong> The <code>signInActivity</code> property was absent on every in-scope user, which means this tenant isn't licensed for Entra ID P1 or P2. Without that property the dashboard can't compute idle days. The "(P1)" suffix in the tab label is the reminder.</div>`;
+      $('staleusersError').innerHTML = `<div class="error-banner"><i class="ph ph-warning" aria-hidden="true"></i> <strong>Entra ID P1/P2 required.</strong> The <code>signInActivity</code> property was absent on every in-scope user, which means this tenant isn't licensed for Entra ID P1 or P2. Without that property the dashboard can't compute idle days. The "(P1)" suffix in the tab label is the reminder.</div>`;
       return;
     }
     $('staleusersContent').style.display = '';
@@ -10986,7 +10992,7 @@ async function loadStaleUsers(force = false) {
     staleusersLoaded = false;
     $('staleusersLoading').style.display = 'none';
     if (e.status === 403) {
-      $('staleusersError').innerHTML = `<div class="error-banner">⚠ <strong>403 from Graph.</strong> ${esc(e.message || String(e))}<br>Likely causes: the tenant isn't licensed for Entra ID P1/P2 (required for <code>signInActivity</code>), or admin consent for <code>User.Read.All</code> / <code>AuditLog.Read.All</code> hasn't been granted yet — sign out and back in to re-consent.</div>`;
+      $('staleusersError').innerHTML = `<div class="error-banner"><i class="ph ph-warning" aria-hidden="true"></i> <strong>403 from Graph.</strong> ${esc(e.message || String(e))}<br>Likely causes: the tenant isn't licensed for Entra ID P1/P2 (required for <code>signInActivity</code>), or admin consent for <code>User.Read.All</code> / <code>AuditLog.Read.All</code> hasn't been granted yet — sign out and back in to re-consent.</div>`;
     } else {
       console.error('Stale users load failed', e);
       $('staleusersError').innerHTML = `<div class="error-banner">Failed to load members: ${esc(e.message || String(e))}</div>`;
@@ -11007,10 +11013,10 @@ function staleStatusOf(r) {
 function staleStatusBadge(r) {
   const state = staleStatusOf(r);
   const map = {
-    active:   { label: 'Active',   bg: '#e7f6ec', border: '#a7d7b5', color: '#1f5d33' },
+    active:   { label: 'Active',   bg: 'var(--good-bg)', border: 'var(--good-border)', color: 'var(--good-ink)' },
     idle:     { label: 'Stale',    bg: '#fff0db', border: '#f0c890', color: '#7a4500' },
-    never:    { label: 'Never',    bg: '#fff8d6', border: '#f0d090', color: '#6a5314' },
-    disabled: { label: 'Disabled', bg: '#fdecec', border: '#f5b5b5', color: '#8a2020' }
+    never:    { label: 'Never',    bg: '#fff8d6', border: 'var(--watch-border)', color: '#6a5314' },
+    disabled: { label: 'Disabled', bg: 'var(--bad-bg)', border: 'var(--bad-border)', color: 'var(--bad-ink)' }
   };
   const m = map[state];
   return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:${m.bg}; border:1px solid ${m.border}; color:${m.color};">${esc(m.label)}</span>`;
@@ -11018,9 +11024,9 @@ function staleStatusBadge(r) {
 
 function staleSigninBadge(r) {
   if (r.neverSignedIn) {
-    return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:#fff8d6; border:1px solid #f0d090; color:#6a5314;">Never</span>`;
+    return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:#fff8d6; border:1px solid var(--watch-border); color:#6a5314;">Never</span>`;
   }
-  return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:#eaf6ee; border:1px solid #a7d7b5; color:#1f5d33;">Active record</span>`;
+  return `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:#eaf6ee; border:1px solid var(--good-border); color:var(--good-ink);">Active record</span>`;
 }
 
 function applyStaleFilters(rows) {
@@ -11114,13 +11120,13 @@ function renderStaleUsers() {
       let actionsHtml;
       if (r.actionStatus) {
         actionsHtml = r.actionStatus.kind === 'ok'
-          ? `<span style="color:#1f5d33; font-weight:600; font-size:11px;">✓ ${esc(r.actionStatus.msg)}</span>`
-          : `<span style="color:#8a2020; font-weight:600; font-size:11px;">✗ ${esc(r.actionStatus.msg)}</span>`;
+          ? `<span style="color:var(--good-ink); font-weight:600; font-size:11px;"><i class="ph ph-check" aria-hidden="true"></i> ${esc(r.actionStatus.msg)}</span>`
+          : `<span style="color:var(--bad-ink); font-weight:600; font-size:11px;"><i class="ph ph-x" aria-hidden="true"></i> ${esc(r.actionStatus.msg)}</span>`;
       } else if (!r.accountEnabled) {
         actionsHtml = `<span style="color:var(--muted); font-size:11px;">—</span>`;
       } else {
-        actionsHtml = `<button class="btn btn-ghost" data-su-revoke="${esc(r.id)}" data-su-name="${esc(r.displayName)}" data-su-upn="${esc(r.userPrincipalName)}" title="Invalidate refresh tokens — forces re-auth">↻ Revoke</button>
-           <button class="btn btn-ghost" data-su-disable="${esc(r.id)}" data-su-name="${esc(r.displayName)}" data-su-upn="${esc(r.userPrincipalName)}" title="Block sign-in (sets accountEnabled=false)" style="margin-left:4px;">⊘ Disable</button>`;
+        actionsHtml = `<button class="btn btn-ghost" data-su-revoke="${esc(r.id)}" data-su-name="${esc(r.displayName)}" data-su-upn="${esc(r.userPrincipalName)}" title="Invalidate refresh tokens — forces re-auth"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Revoke</button>
+           <button class="btn btn-ghost" data-su-disable="${esc(r.id)}" data-su-name="${esc(r.displayName)}" data-su-upn="${esc(r.userPrincipalName)}" title="Block sign-in (sets accountEnabled=false)" style="margin-left:4px;"><i class="ph ph-prohibit" aria-hidden="true"></i> Disable</button>`;
       }
       return `<tr>
         <td>${nameCell}</td>
@@ -11250,7 +11256,7 @@ async function runStaleAction(kind, id, name) {
     }
     closeStaleActionModal();
     renderStaleUsers();
-    $('staleusersNotice').innerHTML = `<div class="notice-banner">✓ ${kind === 'revoke' ? 'Revoked sessions for' : 'Disabled'} <strong>${esc(name)}</strong>.</div>`;
+    $('staleusersNotice').innerHTML = `<div class="notice-banner"><i class="ph ph-check" aria-hidden="true"></i> ${kind === 'revoke' ? 'Revoked sessions for' : 'Disabled'} <strong>${esc(name)}</strong>.</div>`;
     setTimeout(() => { const n = $('staleusersNotice'); if (n) n.innerHTML = ''; }, 8000);
   } catch (e) {
     btn.disabled = false;
@@ -11559,7 +11565,7 @@ async function pushAiScanScriptContent() {
       { headers: h, token: writeToken }
     ));
     $('aiagentsNotice').innerHTML =
-      `<div class="notice-banner">✓ Pushed latest <code>ai-agent-detect.ps1</code> to Intune script <code>${esc(scriptId)}</code>. Devices pick it up on the next daily run (or force a sync). Then ↻ Refresh this tab.</div>`;
+      `<div class="notice-banner"><i class="ph ph-check" aria-hidden="true"></i> Pushed latest <code>ai-agent-detect.ps1</code> to Intune script <code>${esc(scriptId)}</code>. Devices pick it up on the next daily run (or force a sync). Then <i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh this tab.</div>`;
     imeToast('AI Agent Scan script updated in Intune.', 'ok');
   } catch (e) {
     $('aiagentsError').innerHTML =
@@ -11643,10 +11649,10 @@ function aiagentsSourceNoticeHtml() {
     : '';
   const staleWarn = aiagentsScanStale
     ? ` <strong style="color:var(--danger);">Stale:</strong> Graph has not received a device report in over 2 days — the dashboard may be linked to an old remediation, or devices are not uploading output. `
-      + `<button class="btn" style="margin:4px 6px 0 0; padding:4px 10px; font-size:12px;" onclick="relinkAiScanScript()">↻ Re-link script</button>`
-      + `<button class="btn" style="margin:4px 0 0; padding:4px 10px; font-size:12px;" onclick="pushAiScanScriptContent()">⬆ Push latest .ps1</button>`
+      + `<button class="btn" style="margin:4px 6px 0 0; padding:4px 10px; font-size:12px;" onclick="relinkAiScanScript()"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Re-link script</button>`
+      + `<button class="btn" style="margin:4px 0 0; padding:4px 10px; font-size:12px;" onclick="pushAiScanScriptContent()"><i class="ph ph-arrow-up" aria-hidden="true"></i> Push latest .ps1</button>`
     : (aiagentsScanScriptId
-      ? ` <button class="btn" style="margin:4px 0 0; padding:4px 10px; font-size:12px;" onclick="pushAiScanScriptContent()">⬆ Push latest .ps1 to Intune</button>`
+      ? ` <button class="btn" style="margin:4px 0 0; padding:4px 10px; font-size:12px;" onclick="pushAiScanScriptContent()"><i class="ph ph-arrow-up" aria-hidden="true"></i> Push latest .ps1 to Intune</button>`
       : '');
   if (!aiagentsRows.length) {
     const detail = (aiagentsChecked || []).map(c => {
@@ -11658,8 +11664,8 @@ function aiagentsSourceNoticeHtml() {
     }).join(' · ');
     const scanDeployed = (aiagentsChecked || []).some(c => c.source === 'FleetScan' && c.outcome !== 'absent');
     const deployCta = scanDeployed
-      ? `The fleet scan is deployed but no device has reported a detection yet — devices run it on their daily schedule, so allow one check-in cycle (typically ≤ 24h) and ↻ Refresh.${lastRun}${scriptMeta}${staleWarn}`
-      : `<button class="btn" style="margin-top:4px;" onclick="openMeteringDeployModal('aiscan')">⚡ Deploy AI Agent Scan…</button> — an agentless Proactive Remediation (<code>scripts/ai-agent-detect.ps1</code>, same pattern as Software Metering) that hunts AI agents client-side until Microsoft enables Defender agent discovery by default. Devices report on their next daily run.`;
+      ? `The fleet scan is deployed but no device has reported a detection yet — devices run it on their daily schedule, so allow one check-in cycle (typically ≤ 24h) and <i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh.${lastRun}${scriptMeta}${staleWarn}`
+      : `<button class="btn" style="margin-top:4px;" onclick="openMeteringDeployModal('aiscan')"><i class="ph ph-lightning" aria-hidden="true"></i> Deploy AI Agent Scan…</button> — an agentless Proactive Remediation (<code>scripts/ai-agent-detect.ps1</code>, same pattern as Software Metering) that hunts AI agents client-side until Microsoft enables Defender agent discovery by default. Devices report on their next daily run.`;
     return `<div class="notice-banner"><strong>No local AI agents discovered yet.</strong><br>Source check — ${detail}.<br>${deployCta}<br><br><strong>Why the Defender sources are empty:</strong> agent discovery is a staged preview — it requires Defender for Endpoint P2, onboarded devices running Defender Antivirus in active mode, the agent on <a href="https://learn.microsoft.com/en-us/defender-endpoint/local-agent-discovery-overview" target="_blank" rel="noopener noreferrer">Microsoft's supported-agent list</a>, and currently ships through Defender's <strong>Beta platform/engine update channel</strong>. Ground truth lives in the Defender portal → <strong>Assets → AI Agents → Local agents</strong>; if agents show there but not here, that's a dashboard bug — tell us. Agents not on Microsoft's list (e.g. <strong>Grok Build</strong>) only appear via fleet scan.</div>`;
   }
   if (aiagentsSource === 'Merged') {
@@ -11829,8 +11835,8 @@ function renderAiAgents() {
     return (a.agentName || '').toLowerCase().localeCompare((b.agentName || '').toLowerCase());
   });
 
-  const arrow = key => `<span class="arrow">${aiagentsSortKey === key ? (aiagentsSortDir === 'asc' ? '▲' : '▼') : '▼'}</span>`;
-  const newBadge = `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:#fff8d6; border:1px solid #f0d090; color:#6a5314;">New</span>`;
+  const arrow = key => `<span class="arrow">${sortIcon(aiagentsSortKey === key ? aiagentsSortDir : 'desc')}</span>`;
+  const newBadge = `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:#fff8d6; border:1px solid var(--watch-border); color:#6a5314;">New</span>`;
   const table = $('aiagentsTable');
   let rows;
   if (view === 'byagent') {

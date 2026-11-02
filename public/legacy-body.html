@@ -79,18 +79,18 @@
           <input type="text" class="search" id="filter" placeholder="Search by name or publisher…">
           <label class="toggle"><input type="checkbox" id="hideSystem" checked> Hide system</label>
           <label class="toggle"><input type="checkbox" id="dedupe" checked> Collapse 32/64-bit duplicates</label>
-          <label class="toggle"><input type="file" id="csvFile2" accept=".csv,.reg" multiple style="display:none;"><span style="cursor:pointer; color:var(--accent); font-weight:600;" onclick="document.getElementById('csvFile2').click()">↻ Replace / add files</span></label>
+          <label class="toggle"><input type="file" id="csvFile2" accept=".csv,.reg" multiple style="display:none;"><span style="cursor:pointer; color:var(--accent); font-weight:600;" onclick="document.getElementById('csvFile2').click()"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Replace / add files</span></label>
         </div>
       </div>
       <table>
         <thead>
           <tr>
-            <th data-sort="DisplayName">Application <span class="arrow">▼</span></th>
-            <th data-sort="DisplayVersion">Version <span class="arrow">▼</span></th>
-            <th data-sort="Publisher">Publisher <span class="arrow">▼</span></th>
-            <th data-sort="InstallDate">Installed On <span class="arrow">▼</span></th>
-            <th data-sort="Location">Location <span class="arrow">▼</span></th>
-            <th data-sort="Arch">Arch <span class="arrow">▼</span></th>
+            <th data-sort="DisplayName">Application <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+            <th data-sort="DisplayVersion">Version <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+            <th data-sort="Publisher">Publisher <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+            <th data-sort="InstallDate">Installed On <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+            <th data-sort="Location">Location <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+            <th data-sort="Arch">Arch <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -100,7 +100,7 @@
   </div>
 
   <div id="uploadPrompt" class="upload-prompt">
-    <div style="font-size: 32px; margin-bottom: 8px;">📦</div>
+    <div style="font-size: 32px; margin-bottom: 8px;"><i class="ph ph-package" aria-hidden="true"></i></div>
     <div style="font-size:18px; font-weight:700; color:var(--ink);">Drop a registry export to start</div>
     <div style="font-size:13px; margin-top:6px;">A PowerShell-generated CSV, or one-or-more <code>.reg</code> files from Intune <em>Collect diagnostics</em>.</div>
     <input type="file" id="csvFile" accept=".csv,.reg" multiple>
@@ -201,7 +201,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
         <div id="customerSwitcher" style="display:none; position:relative;">
           <button id="customerSwitcherToggle" class="btn btn-ghost" style="display:inline-flex; align-items:center; gap:6px; font-weight:700;">
             <span id="customerSwitcherActive">—</span>
-            <span style="font-size:9px;">▾</span>
+            <span style="font-size:9px;"><i class="ph ph-caret-down" aria-hidden="true"></i></span>
           </button>
           <div id="customerSwitcherMenu" style="display:none; position:absolute; right:0; top:calc(100% + 4px); background:var(--card); border:1px solid var(--line); border-radius:10px; min-width:240px; box-shadow:0 6px 20px rgba(0,0,0,.08); z-index:200; padding:4px 0; overflow:hidden;"></div>
         </div>
@@ -261,7 +261,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
           <label style="display:flex; align-items:center; gap:6px; font-size:12px; cursor:pointer; color:var(--ink-2);">
             <input type="checkbox" id="includePmpcFailed"> Include Patch My PC
           </label>
-          <button class="btn btn-ghost" id="btnReloadApps">↻ Reload apps</button>
+          <button class="btn btn-ghost" id="btnReloadApps"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Reload apps</button>
         </div>
         <div class="app-list" id="appList">
           <div class="loading">Loading apps…</div>
@@ -271,10 +271,10 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
           <table id="errorClusterTable" style="display:none;">
             <thead>
               <tr>
-                <th data-esort="errorCode">Error code <span class="arrow">▼</span></th>
-                <th data-esort="hexErrorCode">Hex <span class="arrow">▼</span></th>
-                <th data-esort="deviceCount">Devices affected <span class="arrow">▼</span></th>
-                <th data-esort="appCount">Apps affected <span class="arrow">▼</span></th>
+                <th data-esort="errorCode">Error code <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                <th data-esort="hexErrorCode">Hex <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                <th data-esort="deviceCount">Devices affected <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                <th data-esort="appCount">Apps affected <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                 <th>Sample apps</th>
               </tr>
             </thead>
@@ -292,7 +292,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
             <div class="meta" id="selAppMeta">—</div>
           </div>
           <div style="display:flex; gap:8px;">
-            <button class="btn btn-ghost" id="btnDetectionRulesFailed">🔍 Detection rule</button>
+            <button class="btn btn-ghost" id="btnDetectionRulesFailed"><i class="ph ph-magnifying-glass" aria-hidden="true"></i> Detection rule</button>
             <button class="btn btn-ghost" id="btnChangeApp">← Change app</button>
           </div>
         </div>
@@ -325,21 +325,21 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
             <h2>Failed installs</h2>
             <div class="controls">
               <input type="text" class="search" id="failedFilter" placeholder="Search device, user, error…">
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnRefresh">↻ Refresh</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
             </div>
           </div>
           <div id="fiModeHint" style="font-size:12px; color:var(--muted); padding:0 0 10px; line-height:1.5;"></div>
           <table>
             <thead>
               <tr>
-                <th data-sort="AppVersion">Application <span class="arrow">▼</span></th>
-                <th data-sort="AppVersion">Version <span class="arrow">▼</span></th>
-                <th data-sort="Platform">Platform <span class="arrow">▼</span></th>
-                <th data-sort="DeviceName">Device <span class="arrow">▼</span></th>
-                <th data-sort="UserPrincipalName">User <span class="arrow">▼</span></th>
-                <th data-sort="InstallState">State <span class="arrow">▼</span></th>
-                <th data-sort="ErrorCode">Error <span class="arrow">▼</span></th>
-                <th data-sort="LastModifiedDateTime">Last modified <span class="arrow">▼</span></th>
+                <th data-sort="AppVersion">Application <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                <th data-sort="AppVersion">Version <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                <th data-sort="Platform">Platform <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                <th data-sort="DeviceName">Device <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                <th data-sort="UserPrincipalName">User <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                <th data-sort="InstallState">State <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                <th data-sort="ErrorCode">Error <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                <th data-sort="LastModifiedDateTime">Last modified <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -385,7 +385,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <div class="table-toolbar">
                 <h2>Top failing apps</h2>
                 <div class="controls">
-                  <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" data-overview-jump="failed">View all →</span>
+                  <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" data-overview-jump="failed">View all <i class="ph ph-arrow-right" aria-hidden="true"></i></span>
                 </div>
               </div>
               <table>
@@ -398,7 +398,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <div class="table-toolbar">
                 <h2>Top drifted software</h2>
                 <div class="controls">
-                  <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" data-overview-jump="drift">View all →</span>
+                  <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" data-overview-jump="drift">View all <i class="ph ph-arrow-right" aria-hidden="true"></i></span>
                 </div>
               </div>
               <table>
@@ -437,7 +437,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
             <label style="display:flex; align-items:center; gap:6px; font-size:12px; cursor:pointer; color:var(--ink-2);">
               <input type="checkbox" id="includePmpcInstalled"> Include Patch My PC
             </label>
-            <button class="btn btn-ghost" id="btnReloadInstalledApps">↻ Reload apps</button>
+            <button class="btn btn-ghost" id="btnReloadInstalledApps"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Reload apps</button>
           </div>
           <div class="app-list no-scroll" id="installedAppList">
             <div class="loading">Loading apps…</div>
@@ -452,8 +452,8 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <div class="meta" id="instAppMeta">—</div>
             </div>
             <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-              <button class="btn btn-ghost" id="btnDetectionRulesInstalled">🔍 Detection rule</button>
-              <button class="btn btn-danger" id="btnDeleteApp">🗑 Delete from Intune</button>
+              <button class="btn btn-ghost" id="btnDetectionRulesInstalled"><i class="ph ph-magnifying-glass" aria-hidden="true"></i> Detection rule</button>
+              <button class="btn btn-danger" id="btnDeleteApp"><i class="ph ph-trash" aria-hidden="true"></i> Delete from Intune</button>
               <button class="btn btn-ghost" id="btnChangeAppInstalled">← Change app</button>
             </div>
           </div>
@@ -471,20 +471,20 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
                 <select class="filter-select" id="installedStateFilter">
                   <option value="">All states</option>
                 </select>
-                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnCopyInstalled">⧉ Copy device names</span>
-                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnExportInstalled">⬇ Export CSV</span>
-                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnRefreshInstalled">↻ Refresh</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnCopyInstalled"><i class="ph ph-copy" aria-hidden="true"></i> Copy device names</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnExportInstalled"><i class="ph ph-download-simple" aria-hidden="true"></i> Export CSV</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnRefreshInstalled"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
               </div>
             </div>
             <table>
               <thead>
                 <tr>
-                  <th data-sort-inst="DeviceName">Device <span class="arrow">▼</span></th>
-                  <th data-sort-inst="UserPrincipalName">User <span class="arrow">▼</span></th>
-                  <th data-sort-inst="AppVersion">Version <span class="arrow">▼</span></th>
-                  <th data-sort-inst="InstallState">State <span class="arrow">▼</span></th>
-                  <th data-sort-inst="Platform">Platform <span class="arrow">▼</span></th>
-                  <th data-sort-inst="LastModifiedDateTime">Last modified <span class="arrow">▼</span></th>
+                  <th data-sort-inst="DeviceName">Device <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort-inst="UserPrincipalName">User <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort-inst="AppVersion">Version <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort-inst="InstallState">State <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort-inst="Platform">Platform <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort-inst="LastModifiedDateTime">Last modified <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                 </tr>
               </thead>
               <tbody id="installedRows"></tbody>
@@ -557,12 +557,12 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <select class="filter-select" id="approvalsTypeFilter">
                 <option value="">All types</option>
               </select>
-              <span style="cursor:pointer; color:#1f5d33; font-weight:600; font-size:13px; display:none;" id="btnApprovalsApproveSel" title="Approve all selected pending requests">✓ Approve selected</span>
-              <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px; display:none;" id="btnApprovalsRejectSel" title="Reject all selected pending requests">✗ Reject selected</span>
-              <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px; display:none;" id="btnApprovalsCancelSel" title="Cancel all selected pending requests">⊘ Cancel selected</span>
-              <span style="cursor:pointer; color:#1f5d33; font-weight:600; font-size:13px; display:none;" id="btnApprovalsCompleteSel" title="Mark all selected approved requests as complete">✔ Complete selected</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnApprovalsClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnApprovalsRefresh">↻ Refresh</span>
+              <span style="cursor:pointer; color:var(--good-ink); font-weight:600; font-size:13px; display:none;" id="btnApprovalsApproveSel" title="Approve all selected pending requests"><i class="ph ph-check" aria-hidden="true"></i> Approve selected</span>
+              <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px; display:none;" id="btnApprovalsRejectSel" title="Reject all selected pending requests"><i class="ph ph-x" aria-hidden="true"></i> Reject selected</span>
+              <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px; display:none;" id="btnApprovalsCancelSel" title="Cancel all selected pending requests"><i class="ph ph-prohibit" aria-hidden="true"></i> Cancel selected</span>
+              <span style="cursor:pointer; color:var(--good-ink); font-weight:600; font-size:13px; display:none;" id="btnApprovalsCompleteSel" title="Mark all selected approved requests as complete"><i class="ph ph-check" aria-hidden="true"></i> Complete selected</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnApprovalsClearKpi" title="Clear KPI selection"><i class="ph ph-x" aria-hidden="true"></i> Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnApprovalsRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
             </div>
           </div>
           <div id="approvalsLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading approval queue…</div>
@@ -572,11 +572,11 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <thead>
                 <tr>
                   <th style="width:26px;"><input type="checkbox" id="apSelectAll" title="Select / deselect all filtered requests" style="cursor:pointer;"></th>
-                  <th data-asort="requestor">Requestor <span class="arrow">▼</span></th>
-                  <th data-asort="type">Type <span class="arrow">▼</span></th>
-                  <th data-asort="status">Status <span class="arrow">▼</span></th>
-                  <th data-asort="requestDateTime">Requested <span class="arrow">▼</span></th>
-                  <th data-asort="lastModifiedDateTime">Last updated <span class="arrow">▼</span></th>
+                  <th data-asort="requestor">Requestor <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-asort="type">Type <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-asort="status">Status <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-asort="requestDateTime">Requested <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-asort="lastModifiedDateTime">Last updated <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                   <th>Justification</th>
                   <th>Actions</th>
                 </tr>
@@ -606,7 +606,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
                 <option value="system">SYSTEM</option>
                 <option value="user">USER</option>
               </select>
-              <button class="btn btn-ghost" id="btnReloadRequired">↻ Reload</button>
+              <button class="btn btn-ghost" id="btnReloadRequired"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Reload</button>
             </div>
           </div>
           <div id="requiredList"><div class="loading" style="padding:24px;">Loading required apps…</div></div>
@@ -631,7 +631,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
                 <option value="user">USER</option>
                 <option value="unknown">Unknown / N/A</option>
               </select>
-              <button class="btn btn-ghost" id="btnReloadUninstall">↻ Reload</button>
+              <button class="btn btn-ghost" id="btnReloadUninstall"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Reload</button>
             </div>
           </div>
           <div id="uninstallList"><div class="loading" style="padding:24px;">Loading uninstall apps…</div></div>
@@ -643,7 +643,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
         <div class="tab-hint">Managed-device inventory for Win11 readiness, post-EOS Win10 cleanup, and stale-device refresh planning. Tile filters + CSV export for Entra-group import. On large tenants, device list + storage load first; RAM is backfilled in the background (or skipped if slim mode is on in Settings).</div>
         <div id="hwLoading" class="loading" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
           <span id="hwLoadingText">Loading devices…</span>
-          <span id="btnHwCancel" style="display:none; cursor:pointer; color:var(--danger); font-weight:600; font-size:13px;" title="Stop the current Graph walk">✕ Cancel</span>
+          <span id="btnHwCancel" style="display:none; cursor:pointer; color:var(--danger); font-weight:600; font-size:13px;" title="Stop the current Graph walk"><i class="ph ph-x" aria-hidden="true"></i> Cancel</span>
         </div>
         <div id="hwError"></div>
         <div id="hwContent" style="display:none;">
@@ -747,9 +747,9 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <h2>Hardware inventory</h2>
               <div class="controls">
                 <input type="text" class="search" id="hwFilter" placeholder="Search device, user, model…">
-                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnHwClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
-                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnHwExport" title="Export currently filtered rows to CSV">⬇ Export CSV</span>
-                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnHwRefresh">↻ Refresh</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnHwClearKpi" title="Clear KPI selection"><i class="ph ph-x" aria-hidden="true"></i> Clear KPI</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnHwExport" title="Export currently filtered rows to CSV"><i class="ph ph-download-simple" aria-hidden="true"></i> Export CSV</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnHwRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
               </div>
             </div>
             <div class="filter-bar">
@@ -789,14 +789,14 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
             <table>
               <thead>
                 <tr>
-                  <th data-sort="deviceName">Device Name <span class="arrow">▼</span></th>
-                  <th data-sort="manufacturer">Manufacturer <span class="arrow">▼</span></th>
-                  <th data-sort="model">Model <span class="arrow">▼</span></th>
-                  <th data-sort="ramGB">RAM (GB) <span class="arrow">▼</span></th>
-                  <th data-sort="totalGB">Total (GB) <span class="arrow">▼</span></th>
-                  <th data-sort="freeGB">Free (GB) <span class="arrow">▼</span></th>
-                  <th data-sort="osVersion">Windows <span class="arrow">▼</span></th>
-                  <th data-sort="lastSync">Last Check-in <span class="arrow">▼</span></th>
+                  <th data-sort="deviceName">Device Name <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort="manufacturer">Manufacturer <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort="model">Model <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort="ramGB">RAM (GB) <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort="totalGB">Total (GB) <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort="freeGB">Free (GB) <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort="osVersion">Windows <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort="lastSync">Last Check-in <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -867,12 +867,12 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); cursor:pointer;" title="Hybrid Autopilot enrollment legitimately creates one Entra-joined + one hybrid-joined record per device. Default ON ignores those.">
                 <input type="checkbox" id="autopilotHideHybrid" checked> Hide hybrid-by-design duplicates
               </label>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnAutopilotClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnAutopilotClearKpi" title="Clear KPI selection"><i class="ph ph-x" aria-hidden="true"></i> Clear KPI</span>
               <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAutopilotDeviceLink" title="Pull the DeviceLink CSV Intune needs before a device preparation name template can apply">Device Link CSV</span>
               <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnAutopilotSelectAll" title="Select every orphan shown in the table">Select all</span>
-              <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px; display:none;" id="btnAutopilotDelete" title="Delete the selected Autopilot registrations. The managed device is already gone.">🗑 Delete selected</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAutopilotExport">⬇ Export CSV</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAutopilotRefresh">↻ Refresh</span>
+              <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px; display:none;" id="btnAutopilotDelete" title="Delete the selected Autopilot registrations. The managed device is already gone."><i class="ph ph-trash" aria-hidden="true"></i> Delete selected</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAutopilotExport"><i class="ph ph-download-simple" aria-hidden="true"></i> Export CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAutopilotRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
             </div>
           </div>
           <div id="autopilotLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading Autopilot data…</div>
@@ -882,14 +882,14 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <thead>
                 <tr>
                   <th id="apSelectCol" style="width:36px; display:none;"><input type="checkbox" id="autopilotSelectAll" title="Select all shown orphans" style="cursor:pointer;"></th>
-                  <th data-apsort="serialNumber">Serial <span class="arrow">▼</span></th>
-                  <th data-apsort="manufacturer">Manufacturer <span class="arrow">▼</span></th>
-                  <th data-apsort="model">Model <span class="arrow">▼</span></th>
-                  <th data-apsort="groupTag">Group tag <span class="arrow">▼</span></th>
-                  <th data-apsort="purchaseOrderIdentifier">PO <span class="arrow">▼</span></th>
-                  <th data-apsort="assignmentStatus">Profile <span class="arrow">▼</span></th>
-                  <th data-apsort="lastContactedDateTime">Last contact <span class="arrow">▼</span></th>
-                  <th data-apsort="state">Status <span class="arrow">▼</span></th>
+                  <th data-apsort="serialNumber">Serial <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-apsort="manufacturer">Manufacturer <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-apsort="model">Model <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-apsort="groupTag">Group tag <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-apsort="purchaseOrderIdentifier">PO <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-apsort="assignmentStatus">Profile <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-apsort="lastContactedDateTime">Last contact <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-apsort="state">Status <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                 </tr>
               </thead>
               <tbody id="autopilotRowsBody"></tbody>
@@ -927,7 +927,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
             <div style="display:flex; align-items:center; gap:14px;">
               <svg width="48" height="48" viewBox="0 0 50 50" style="flex-shrink:0;" aria-hidden="true">
                 <circle cx="25" cy="25" r="20" fill="none" stroke="var(--line)" stroke-width="5"/>
-                <circle id="blEscrowRing" cx="25" cy="25" r="20" fill="none" stroke="#1f5d33" stroke-width="5"
+                <circle id="blEscrowRing" cx="25" cy="25" r="20" fill="none" stroke="var(--good-ink)" stroke-width="5"
                         stroke-dasharray="125.66" stroke-dashoffset="125.66"
                         transform="rotate(-90 25 25)" stroke-linecap="round"
                         style="transition: stroke-dashoffset .6s ease, stroke .2s ease;"/>
@@ -953,9 +953,9 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
                 <option value="key-escrowed-any">Keys escrowed</option>
                 <option value="no-entra-link">No Entra device link</option>
               </select>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnBitlockerClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnBitlockerExport">⬇ Export CSV</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnBitlockerRefresh">↻ Refresh</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnBitlockerClearKpi" title="Clear KPI selection"><i class="ph ph-x" aria-hidden="true"></i> Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnBitlockerExport"><i class="ph ph-download-simple" aria-hidden="true"></i> Export CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnBitlockerRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
             </div>
           </div>
           <div id="bitlockerLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading BitLocker state…</div>
@@ -964,13 +964,13 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
             <table>
               <thead>
                 <tr>
-                  <th data-bsort="deviceName">Device <span class="arrow">▼</span></th>
-                  <th data-bsort="userPrincipalName">User <span class="arrow">▼</span></th>
-                  <th data-bsort="osVersion">Windows <span class="arrow">▼</span></th>
-                  <th data-bsort="model">Model <span class="arrow">▼</span></th>
-                  <th data-bsort="encryptionState">Encrypted (Intune) <span class="arrow">▼</span></th>
-                  <th data-bsort="keyCount">Keys escrowed <span class="arrow">▼</span></th>
-                  <th data-bsort="lastSync">Last check-in <span class="arrow">▼</span></th>
+                  <th data-bsort="deviceName">Device <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-bsort="userPrincipalName">User <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-bsort="osVersion">Windows <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-bsort="model">Model <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-bsort="encryptionState">Encrypted (Intune) <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-bsort="keyCount">Keys escrowed <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-bsort="lastSync">Last check-in <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                 </tr>
               </thead>
               <tbody id="bitlockerRowsBody"></tbody>
@@ -1037,10 +1037,10 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
                 <option value="disabled">Secure Boot off</option>
                 <option value="unknown">Unknown</option>
               </select>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnSecurebootClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnSecurebootExport">⬇ Export CSV</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnSecurebootRefresh">↻ Refresh</span>
-              <span id="btnSecurebootCancel" style="display:none; cursor:pointer; color:var(--danger); font-weight:600; font-size:13px;" title="Stop DHA fan-out">✕ Cancel</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnSecurebootClearKpi" title="Clear KPI selection"><i class="ph ph-x" aria-hidden="true"></i> Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnSecurebootExport"><i class="ph ph-download-simple" aria-hidden="true"></i> Export CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnSecurebootRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
+              <span id="btnSecurebootCancel" style="display:none; cursor:pointer; color:var(--danger); font-weight:600; font-size:13px;" title="Stop DHA fan-out"><i class="ph ph-x" aria-hidden="true"></i> Cancel</span>
             </div>
           </div>
           <div id="securebootLoading" class="loading" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:12px;">
@@ -1053,14 +1053,14 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <table class="app-assign-table">
                 <thead>
                   <tr>
-                    <th data-sbsort="deviceName">Device <span class="arrow">▼</span></th>
-                    <th data-sbsort="userPrincipalName">User <span class="arrow">▼</span></th>
-                    <th data-sbsort="osVersion">Windows <span class="arrow">▼</span></th>
-                    <th data-sbsort="manufacturer">Manufacturer <span class="arrow">▼</span></th>
-                    <th data-sbsort="model">Model <span class="arrow">▼</span></th>
-                    <th data-sbsort="secureBoot">Secure Boot <span class="arrow">▼</span></th>
-                    <th data-sbsort="tpmVersion">TPM <span class="arrow">▼</span></th>
-                    <th data-sbsort="lastSync">Last check-in <span class="arrow">▼</span></th>
+                    <th data-sbsort="deviceName">Device <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sbsort="userPrincipalName">User <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sbsort="osVersion">Windows <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sbsort="manufacturer">Manufacturer <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sbsort="model">Model <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sbsort="secureBoot">Secure Boot <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sbsort="tpmVersion">TPM <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sbsort="lastSync">Last check-in <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                   </tr>
                 </thead>
                 <tbody id="securebootRowsBody"></tbody>
@@ -1072,7 +1072,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
       </div><!-- /intuneSubSecureboot -->
 
       <div id="intuneSubCerthealth" style="display:none;">
-        <div class="tab-hint">Intune management health, derived from the MDM certificate lifecycle. A Windows device whose management certificate has expired can still look perfectly healthy in the Intune portal — compliant, recently synced, online — while Win32 apps, remediation scripts and every other IME-driven workload silently stop working. This tab translates <code>managementCertificateExpirationDate</code> into that operational signal — an assessment inferred from Graph data and observed tenant patterns, not a direct client inspection. Click any health badge or 🔍 Investigate for the full assessment.</div>
+        <div class="tab-hint">Intune management health, derived from the MDM certificate lifecycle. A Windows device whose management certificate has expired can still look perfectly healthy in the Intune portal — compliant, recently synced, online — while Win32 apps, remediation scripts and every other IME-driven workload silently stop working. This tab translates <code>managementCertificateExpirationDate</code> into that operational signal — an assessment inferred from Graph data and observed tenant patterns, not a direct client inspection. Click any health badge or <i class="ph ph-magnifying-glass" aria-hidden="true"></i> Investigate for the full assessment.</div>
         <div class="tiles">
           <div class="tile" data-ch-tile="" style="cursor:pointer;" title="Show all devices">
             <div class="tile-label">Windows devices</div>
@@ -1123,11 +1123,11 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
                 <option value="stale">Stale sync</option>
                 <option value="healthy">Healthy</option>
               </select>
-              <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px; display:none;" id="btnCerthealthDelete" title="Delete the selected devices from Intune — removes the record; each device is retired on its next check-in">🗑 Delete selected</span>
-              <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px; display:none;" id="btnCerthealthWipe" title="Remote wipe the selected devices — factory reset; device remains enrolled in Intune">⚠ Wipe selected</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnCerthealthClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnCerthealthExport">⬇ Export CSV</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnCerthealthRefresh">↻ Refresh</span>
+              <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px; display:none;" id="btnCerthealthDelete" title="Delete the selected devices from Intune — removes the record; each device is retired on its next check-in"><i class="ph ph-trash" aria-hidden="true"></i> Delete selected</span>
+              <span style="cursor:pointer; color:#c0392b; font-weight:600; font-size:13px; display:none;" id="btnCerthealthWipe" title="Remote wipe the selected devices — factory reset; device remains enrolled in Intune"><i class="ph ph-warning" aria-hidden="true"></i> Wipe selected</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnCerthealthClearKpi" title="Clear KPI selection"><i class="ph ph-x" aria-hidden="true"></i> Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnCerthealthExport"><i class="ph ph-download-simple" aria-hidden="true"></i> Export CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnCerthealthRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
             </div>
           </div>
           <div id="certhealthLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading management health…</div>
@@ -1137,14 +1137,14 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <thead>
                 <tr>
                   <th style="width:26px;"><input type="checkbox" id="chSelectAll" title="Select / deselect all filtered devices" style="cursor:pointer;"></th>
-                  <th data-csort="deviceName">Device <span class="arrow">▼</span></th>
-                  <th data-csort="userPrincipalName">User <span class="arrow">▼</span></th>
-                  <th data-csort="osVersion">Windows <span class="arrow">▼</span></th>
-                  <th data-csort="daysRemaining">Days remaining <span class="arrow">▼</span></th>
-                  <th data-csort="managementCertificateExpirationDate">Cert expires <span class="arrow">▼</span></th>
-                  <th data-csort="daysSinceSync">Days since sync <span class="arrow">▼</span></th>
-                  <th data-csort="risk">Risk <span class="arrow">▼</span></th>
-                  <th data-csort="state">Health <span class="arrow">▼</span></th>
+                  <th data-csort="deviceName">Device <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-csort="userPrincipalName">User <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-csort="osVersion">Windows <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-csort="daysRemaining">Days remaining <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-csort="managementCertificateExpirationDate">Cert expires <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-csort="daysSinceSync">Days since sync <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-csort="risk">Risk <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-csort="state">Health <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -1170,7 +1170,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
             <h2>Software inventory</h2>
             <div class="controls">
               <input type="text" class="search" id="vulnFilter" placeholder="Search software, vendor, platform…">
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnVulnRefresh">↻ Refresh</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnVulnRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
             </div>
           </div>
           <div id="vulnLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading vulnerability data…</div>
@@ -1179,11 +1179,11 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
             <table>
               <thead>
                 <tr>
-                  <th data-vsort="softwareName">Software <span class="arrow">▼</span></th>
-                  <th data-vsort="osPlatform">OS Platform <span class="arrow">▼</span></th>
-                  <th data-vsort="vendor">Vendor <span class="arrow">▼</span></th>
-                  <th data-vsort="weaknesses">Weaknesses <span class="arrow">▼</span></th>
-                  <th data-vsort="exposedDevices">Exposed Devices <span class="arrow">▼</span></th>
+                  <th data-vsort="softwareName">Software <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-vsort="osPlatform">OS Platform <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-vsort="vendor">Vendor <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-vsort="weaknesses">Weaknesses <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-vsort="exposedDevices">Exposed Devices <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                 </tr>
               </thead>
               <tbody id="vulnRowsBody"></tbody>
@@ -1228,8 +1228,8 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <input type="text" class="search" id="assignmentsSearch" placeholder="Search Entra groups by name…" style="width:100%;" autocomplete="off">
               <div id="assignmentsSearchResults" style="display:none; position:absolute; left:0; right:0; top:100%; background:var(--card); border:1px solid var(--line); border-radius:8px; margin-top:4px; max-height:480px; overflow-y:auto; z-index:50; box-shadow:0 4px 16px rgba(0,0,0,.06);"></div>
             </div>
-            <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAssignmentsRefresh">↻ Refresh</span>
-            <span id="btnAssignmentsCancel" style="display:none; cursor:pointer; color:var(--danger); font-weight:600; font-size:13px;" title="Stop indexing policies">✕ Cancel</span>
+            <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAssignmentsRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
+            <span id="btnAssignmentsCancel" style="display:none; cursor:pointer; color:var(--danger); font-weight:600; font-size:13px;" title="Stop indexing policies"><i class="ph ph-x" aria-hidden="true"></i> Cancel</span>
           </div>
           <div id="assignmentsLoadStatus" class="meta" style="margin-top:10px; font-size:12px;"></div>
         </div>
@@ -1410,10 +1410,10 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
       <div id="intuneSubPosture" style="display:none;">
         <div class="tab-hint">MSP customer-review of compliance + Conditional Access posture — the unsafe defaults and assignment patterns auditors flag. Compliance uses existing Intune scopes. Conditional Access needs optional <code>Policy.Read.All</code> (grant only when you want the CA section).</div>
         <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
-          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnPostureRefresh">↻ Refresh</span>
-          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnPostureExportComp">⬇ Export Compliance CSV</span>
-          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnPostureExportCa">⬇ Export CA CSV</span>
-          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnPostureClearKpi" title="Clear tile selection">✕ Clear KPI</span>
+          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnPostureRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
+          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnPostureExportComp"><i class="ph ph-download-simple" aria-hidden="true"></i> Export Compliance CSV</span>
+          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnPostureExportCa"><i class="ph ph-download-simple" aria-hidden="true"></i> Export CA CSV</span>
+          <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnPostureClearKpi" title="Clear tile selection"><i class="ph ph-x" aria-hidden="true"></i> Clear KPI</span>
         </div>
         <div id="postureLoading" style="color:var(--muted); font-size:13px; padding:12px; display:none;">Loading posture…</div>
         <div id="postureError"></div>
@@ -1522,8 +1522,8 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
             <h2>Software version drift</h2>
             <div class="controls">
               <input type="text" class="search" id="driftFilter" placeholder="Search software, vendor…">
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnDriftRefresh">↻ Refresh</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnDriftExport">⬇ Export CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnDriftRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnDriftExport"><i class="ph ph-download-simple" aria-hidden="true"></i> Export CSV</span>
             </div>
           </div>
           <div id="driftLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading drift data…</div>
@@ -1532,12 +1532,12 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
             <table>
               <thead>
                 <tr>
-                  <th data-sort-drift="softwareName">Software <span class="arrow">▼</span></th>
-                  <th data-sort-drift="vendor">Vendor <span class="arrow">▼</span></th>
-                  <th data-sort-drift="dominantVersion">Dominant Version <span class="arrow">▼</span></th>
-                  <th data-sort-drift="driftPct">Drift % <span class="arrow">▼</span></th>
-                  <th data-sort-drift="driftedDevices">Drifted Devices <span class="arrow">▼</span></th>
-                  <th data-sort-drift="versionCount">Versions Detected <span class="arrow">▼</span></th>
+                  <th data-sort-drift="softwareName">Software <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort-drift="vendor">Vendor <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort-drift="dominantVersion">Dominant Version <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort-drift="driftPct">Drift % <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort-drift="driftedDevices">Drifted Devices <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-sort-drift="versionCount">Versions Detected <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                 </tr>
               </thead>
               <tbody id="driftRows"></tbody>
@@ -1563,7 +1563,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <h2>Soft-deleted devices</h2>
               <div class="controls">
                 <input type="text" class="search" id="sdFilter" placeholder="Search device, OS…">
-                <span id="btnSdRefresh" style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;">↻ Refresh</span>
+                <span id="btnSdRefresh" style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
               </div>
             </div>
             <table>
@@ -1625,9 +1625,9 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
                 </select>
               </div>
               <label class="toggle" title="Include accounts with no recorded sign-in activity"><input type="checkbox" id="staleusersIncludeNever" checked> Include never-signed-in</label>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnStaleusersClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnStaleusersExport">⬇ Export CSV</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnStaleusersRefresh">↻ Refresh</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnStaleusersClearKpi" title="Clear KPI selection"><i class="ph ph-x" aria-hidden="true"></i> Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnStaleusersExport"><i class="ph ph-download-simple" aria-hidden="true"></i> Export CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnStaleusersRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
             </div>
           </div>
           <div id="staleusersLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading members…</div>
@@ -1637,13 +1637,13 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
             <table>
               <thead>
                 <tr>
-                  <th data-su-sort="displayName">Display name <span class="arrow">▼</span></th>
-                  <th data-su-sort="userPrincipalName">UPN <span class="arrow">▼</span></th>
-                  <th data-su-sort="lastActivityMs">Last activity <span class="arrow">▼</span></th>
-                  <th data-su-sort="daysIdle">Days idle <span class="arrow">▼</span></th>
-                  <th data-su-sort="signinBadge">Sign-in <span class="arrow">▼</span></th>
-                  <th data-su-sort="licenseCount">Licensed <span class="arrow">▼</span></th>
-                  <th data-su-sort="status">Status <span class="arrow">▼</span></th>
+                  <th data-su-sort="displayName">Display name <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-su-sort="userPrincipalName">UPN <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-su-sort="lastActivityMs">Last activity <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-su-sort="daysIdle">Days idle <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-su-sort="signinBadge">Sign-in <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-su-sort="licenseCount">Licensed <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-su-sort="status">Status <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -1708,9 +1708,9 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
                   <option value="byagent">By agent name</option>
                 </select>
               </div>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnAiagentsClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAiagentsExport">⬇ Export CSV</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAiagentsRefresh">↻ Refresh</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnAiagentsClearKpi" title="Clear KPI selection"><i class="ph ph-x" aria-hidden="true"></i> Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAiagentsExport"><i class="ph ph-download-simple" aria-hidden="true"></i> Export CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAiagentsRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
             </div>
           </div>
           <div id="aiagentsLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading AI agents…</div>
@@ -1785,9 +1785,9 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
                 <option value="10240">&lt; 10 GB (alert default)</option>
                 <option value="20480">&lt; 20 GB (warning band)</option>
               </select>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnDiskspaceClearKpi" title="Clear KPI selection">✕ Clear KPI</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnDiskspaceExport">⬇ Export CSV</span>
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnDiskspaceRefresh">↻ Refresh</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnDiskspaceClearKpi" title="Clear KPI selection"><i class="ph ph-x" aria-hidden="true"></i> Clear KPI</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnDiskspaceExport"><i class="ph ph-download-simple" aria-hidden="true"></i> Export CSV</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnDiskspaceRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
             </div>
           </div>
           <div id="diskspaceLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading disk-space inventory…</div>
@@ -1796,14 +1796,14 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
             <table>
               <thead>
                 <tr>
-                  <th data-dsort="deviceName">Device <span class="arrow">▼</span></th>
-                  <th data-dsort="userPrincipalName">User <span class="arrow">▼</span></th>
-                  <th data-dsort="osVersion">Windows <span class="arrow">▼</span></th>
-                  <th data-dsort="model">Model <span class="arrow">▼</span></th>
-                  <th data-dsort="freeMB">Free <span class="arrow">▼</span></th>
-                  <th data-dsort="totalMB">Total <span class="arrow">▼</span></th>
-                  <th data-dsort="freePct">Free % <span class="arrow">▼</span></th>
-                  <th data-dsort="lastSync">Last check-in <span class="arrow">▼</span></th>
+                  <th data-dsort="deviceName">Device <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-dsort="userPrincipalName">User <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-dsort="osVersion">Windows <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-dsort="model">Model <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-dsort="freeMB">Free <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-dsort="totalMB">Total <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-dsort="freePct">Free % <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-dsort="lastSync">Last check-in <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                 </tr>
               </thead>
               <tbody id="diskspaceRowsBody"></tbody>
@@ -1817,11 +1817,11 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
         <div class="tab-hint">All proactive remediation scripts (<code>deviceHealthScripts</code>) with their schedules. Click a script to open its Intune admin-center blade.</div>
 
         <div id="remediationImeCard" style="padding:14px 16px; background:var(--row-hover); border:1px solid var(--line); border-radius:8px; margin-bottom:16px;">
-          <div style="font-weight:600; font-size:14px; margin-bottom:4px;">⚡ IME Required App Check-in — run on a device <span class="meta" style="font-weight:400; font-size:12px;">(Rudy Ooms / Call4Cloud)</span></div>
-          <div style="font-size:12px; color:var(--muted); line-height:1.6; margin-bottom:10px;">Pick a Windows device and force an on-demand required-app check-in — triggers the IME <code>IStatusService.CheckInAsync</code> path, cutting the ~60-minute wait for required Win32 apps after Autopilot or a new assignment. The remediation runs as the <strong>logged-on user</strong>, so the device needs a signed-in user and to be online; otherwise Intune queues it. The same <strong>⚡ Check-in</strong> action also lives on every device row in the Hardware and Failed Install tabs, and inside the Management health tab's Health Assessment panel.</div>
+          <div style="font-weight:600; font-size:14px; margin-bottom:4px;"><i class="ph ph-lightning" aria-hidden="true"></i> IME Required App Check-in — run on a device <span class="meta" style="font-weight:400; font-size:12px;">(Rudy Ooms / Call4Cloud)</span></div>
+          <div style="font-size:12px; color:var(--muted); line-height:1.6; margin-bottom:10px;">Pick a Windows device and force an on-demand required-app check-in — triggers the IME <code>IStatusService.CheckInAsync</code> path, cutting the ~60-minute wait for required Win32 apps after Autopilot or a new assignment. The remediation runs as the <strong>logged-on user</strong>, so the device needs a signed-in user and to be online; otherwise Intune queues it. The same <strong><i class="ph ph-lightning" aria-hidden="true"></i> Check-in</strong> action also lives on every device row in the Hardware and Failed Install tabs, and inside the Management health tab's Health Assessment panel.</div>
           <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; position:relative;">
             <input type="text" class="search" id="imePickerSearch" placeholder="Search device by name…" style="flex:1; min-width:240px;" autocomplete="off">
-            <button class="btn" id="btnImeRun" disabled>⚡ Run check-in</button>
+            <button class="btn" id="btnImeRun" disabled><i class="ph ph-lightning" aria-hidden="true"></i> Run check-in</button>
             <div id="imePickerResults" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:20; max-height:220px; overflow-y:auto; border:1px solid var(--line); border-radius:6px; margin-top:4px; background:var(--card); box-shadow:0 6px 18px rgba(0,0,0,.12);"></div>
           </div>
           <div id="imePickerSelected" style="display:none; margin-top:8px; padding:6px 10px; background:var(--accent-soft); border-radius:6px; font-size:12px;"></div>
@@ -1835,7 +1835,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
             <h2>Remediations</h2>
             <div class="controls">
               <input type="text" class="search" id="remediationFilter" placeholder="Search script or publisher…">
-              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnRemediationRefresh">↻ Refresh</span>
+              <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnRemediationRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
             </div>
           </div>
           <div id="remediationLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading remediation scripts…</div>
@@ -1844,11 +1844,11 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
             <table>
               <thead>
                 <tr>
-                  <th data-rsort="displayName">Script name <span class="arrow">▼</span></th>
-                  <th data-rsort="publisher">Publisher <span class="arrow">▼</span></th>
-                  <th data-rsort="schedule">Schedule <span class="arrow">▼</span></th>
-                  <th data-rsort="assignmentCount">Assigned groups <span class="arrow">▼</span></th>
-                  <th data-rsort="lastModified">Last modified <span class="arrow">▼</span></th>
+                  <th data-rsort="displayName">Script name <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-rsort="publisher">Publisher <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-rsort="schedule">Schedule <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-rsort="assignmentCount">Assigned groups <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                  <th data-rsort="lastModified">Last modified <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                 </tr>
               </thead>
               <tbody id="remediationRowsBody"></tbody>
@@ -1864,7 +1864,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
         <div id="meteringEmpty" style="display:none; padding:20px 22px; background:var(--row-hover); border:1px solid var(--line); border-radius:8px; margin-bottom:16px;">
           <div style="font-weight:600; font-size:14px; margin-bottom:8px;">Software metering not configured for this customer</div>
           <div style="font-size:13px; color:var(--muted); line-height:1.6; margin-bottom:14px;">The metering collection script is a Proactive Remediation that needs to be created in this tenant before this tab has data to show. Deploy it directly from here, or upload <code>scripts/software-metering-detect.ps1</code> manually and paste its script ID into <strong>Settings → Customers</strong>.</div>
-          <button class="btn" id="btnMeteringDeploy" style="margin-right:8px;">⚡ Auto-deploy script…</button>
+          <button class="btn" id="btnMeteringDeploy" style="margin-right:8px;"><i class="ph ph-lightning" aria-hidden="true"></i> Auto-deploy script…</button>
           <span style="font-size:12px; color:var(--muted);">requires re-consent for one new write scope on first use</span>
         </div>
 
@@ -1916,10 +1916,10 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <h2 id="meteringTableTitle">Apps</h2>
               <div class="controls">
                 <input type="text" class="search" id="meteringFilter" placeholder="Search app or publisher…">
-                <span style="cursor:pointer; color:var(--muted); font-weight:600; font-size:13px; display:none;" id="btnMeteringClearKpi" title="Clear KPI filter">✕ Clear KPI</span>
-                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnMeteringExport">⬇ Export CSV</span>
-                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnMeteringRefresh">↻ Refresh</span>
-                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnMeteringRedeploy" title="Re-run the Auto-deploy wizard (e.g. after deleting the script in Intune, or to change the assignment / schedule)">⚡ Redeploy script…</span>
+                <span style="cursor:pointer; color:var(--muted); font-weight:600; font-size:13px; display:none;" id="btnMeteringClearKpi" title="Clear KPI filter"><i class="ph ph-x" aria-hidden="true"></i> Clear KPI</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnMeteringExport"><i class="ph ph-download-simple" aria-hidden="true"></i> Export CSV</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnMeteringRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnMeteringRedeploy" title="Re-run the Auto-deploy wizard (e.g. after deleting the script in Intune, or to change the assignment / schedule)"><i class="ph ph-lightning" aria-hidden="true"></i> Redeploy script…</span>
               </div>
             </div>
 
@@ -1927,13 +1927,13 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <table>
                 <thead>
                   <tr>
-                    <th data-sort-metering="app">App <span class="arrow">▼</span></th>
-                    <th data-sort-metering="publisher">Publisher <span class="arrow">▼</span></th>
-                    <th data-sort-metering="installs">Installs <span class="arrow">▼</span></th>
-                    <th data-sort-metering="active30d">Active 30d <span class="arrow">▼</span></th>
-                    <th data-sort-metering="idle90d">Idle 90d+ <span class="arrow">▼</span></th>
-                    <th data-sort-metering="neverLaunched">Never launched <span class="arrow">▼</span></th>
-                    <th data-sort-metering="lastFleetUse">Last fleet use <span class="arrow">▼</span></th>
+                    <th data-sort-metering="app">App <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-metering="publisher">Publisher <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-metering="installs">Installs <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-metering="active30d">Active 30d <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-metering="idle90d">Idle 90d+ <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-metering="neverLaunched">Never launched <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-metering="lastFleetUse">Last fleet use <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                   </tr>
                 </thead>
                 <tbody id="meteringAppRows"></tbody>
@@ -1949,10 +1949,10 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <table>
                 <thead>
                   <tr>
-                    <th data-sort-metering-drill="deviceName">Device <span class="arrow">▼</span></th>
-                    <th data-sort-metering-drill="version">Version <span class="arrow">▼</span></th>
-                    <th data-sort-metering-drill="daysSinceUse">Days since use <span class="arrow">▼</span></th>
-                    <th data-sort-metering-drill="lastReported">Last reported <span class="arrow">▼</span></th>
+                    <th data-sort-metering-drill="deviceName">Device <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-metering-drill="version">Version <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-metering-drill="daysSinceUse">Days since use <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-metering-drill="lastReported">Last reported <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                   </tr>
                 </thead>
                 <tbody id="meteringDrillRows"></tbody>
@@ -1964,7 +1964,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
       </div><!-- /intuneSubMetering -->
 
       <div id="intuneSubAppversions" style="display:none;">
-        <div class="tab-hint">Version sprawl in your <strong>Intune app catalog</strong> (<code>deviceAppManagement/mobileApps</code>) — the app <em>packages</em> you've created/uploaded, <strong>assigned or not</strong>. Surfaces apps you hold many versions of (the classic "11 Notepad++ packages" mess, often from PatchMyPC publishing) so you can retire the superseded ones. <strong>Surplus</strong> = packages older than the newest version of that app; <strong>Unassigned</strong> packages target no group at all (safest to delete). Click 🗑 on any package to delete it from Intune (reuses the typed-confirm Delete flow, multi-admin-approval aware).</div>
+        <div class="tab-hint">Version sprawl in your <strong>Intune app catalog</strong> (<code>deviceAppManagement/mobileApps</code>) — the app <em>packages</em> you've created/uploaded, <strong>assigned or not</strong>. Surfaces apps you hold many versions of (the classic "11 Notepad++ packages" mess, often from PatchMyPC publishing) so you can retire the superseded ones. <strong>Surplus</strong> = packages older than the newest version of that app; <strong>Unassigned</strong> packages target no group at all (safest to delete). Click <i class="ph ph-trash" aria-hidden="true"></i> on any package to delete it from Intune (reuses the typed-confirm Delete flow, multi-admin-approval aware).</div>
 
         <div id="appversionsLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading Intune app catalog…</div>
         <div id="appversionsError"></div>
@@ -2017,10 +2017,10 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
                 <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); cursor:pointer; white-space:nowrap;" title="Hide apps held in only one package — focus on the version sprawl">
                   <input type="checkbox" id="appverDupesOnly" checked> Only apps with duplicates
                 </label>
-                <span style="cursor:pointer; color:var(--muted); font-weight:600; font-size:13px; display:none;" id="btnAppverClearKpi" title="Clear KPI filter">✕ Clear KPI</span>
+                <span style="cursor:pointer; color:var(--muted); font-weight:600; font-size:13px; display:none;" id="btnAppverClearKpi" title="Clear KPI filter"><i class="ph ph-x" aria-hidden="true"></i> Clear KPI</span>
                 <a href="https://github.com/call4cloud-code/Intunewin-Downloader-Public/raw/main/0.6.127.zip" target="_blank" rel="noopener noreferrer" style="color:var(--accent); font-weight:600; font-size:13px; text-decoration:none;" title="Zip of the portable app. Unzip it and run IntuneWinDownloader.WinUI.exe. The dashboard does not launch it.">Download IntuneWin Downloader</a>
-                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAppverExport">⬇ Export CSV</span>
-                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAppverRefresh">↻ Refresh</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAppverExport"><i class="ph ph-download-simple" aria-hidden="true"></i> Export CSV</span>
+                <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAppverRefresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</span>
               </div>
             </div>
 
@@ -2028,13 +2028,13 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <table>
                 <thead>
                   <tr>
-                    <th data-sort-appver="app">App <span class="arrow">▼</span></th>
-                    <th data-sort-appver="publisher">Publisher <span class="arrow">▼</span></th>
-                    <th data-sort-appver="versionCount">Packages <span class="arrow">▼</span></th>
-                    <th data-sort-appver="newest">Newest version <span class="arrow">▼</span></th>
-                    <th data-sort-appver="assignedCount">Assigned <span class="arrow">▼</span></th>
-                    <th data-sort-appver="unassignedCount">Unassigned <span class="arrow">▼</span></th>
-                    <th data-sort-appver="platform">Platform <span class="arrow">▼</span></th>
+                    <th data-sort-appver="app">App <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-appver="publisher">Publisher <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-appver="versionCount">Packages <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-appver="newest">Newest version <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-appver="assignedCount">Assigned <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-appver="unassignedCount">Unassigned <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-appver="platform">Platform <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                   </tr>
                 </thead>
                 <tbody id="appverAppRows"></tbody>
@@ -2046,15 +2046,15 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <div style="padding:12px 14px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px;">
                 <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px;" id="btnAppverDrillBack">← Back to apps</span>
                 <span style="font-weight:600;" id="appverDrillTitle"></span>
-                <span style="cursor:pointer; color:#8a2020; font-weight:600; font-size:13px; display:none; margin-left:auto;" id="btnAppverDeleteSel" title="Permanently delete the selected packages from Intune">🗑 Delete Selected</span>
+                <span style="cursor:pointer; color:var(--bad-ink); font-weight:600; font-size:13px; display:none; margin-left:auto;" id="btnAppverDeleteSel" title="Permanently delete the selected packages from Intune"><i class="ph ph-trash" aria-hidden="true"></i> Delete Selected</span>
               </div>
               <table>
                 <thead>
                   <tr>
                     <th style="width:28px;"><input type="checkbox" id="apvSelectAll" title="Select all packages"></th>
-                    <th data-sort-appver-drill="version">Version <span class="arrow">▼</span></th>
-                    <th data-sort-appver-drill="assigned">Assignment <span class="arrow">▼</span></th>
-                    <th data-sort-appver-drill="created">Created <span class="arrow">▼</span></th>
+                    <th data-sort-appver-drill="version">Version <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-appver-drill="assigned">Assignment <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
+                    <th data-sort-appver-drill="created">Created <span class="arrow"><i class="ph ph-caret-down" aria-hidden="true"></i></span></th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -2081,7 +2081,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
       </div>
 
       <div id="logDropZone" style="border:2px dashed var(--line); border-radius:12px; padding:32px 20px; text-align:center; cursor:pointer; transition:border-color 0.15s, background 0.15s;">
-        <div style="font-size:28px; margin-bottom:8px;">📄</div>
+        <div style="font-size:28px; margin-bottom:8px;"><i class="ph ph-file-text" aria-hidden="true"></i></div>
         <div style="font-size:13px; font-weight:600; margin-bottom:4px;">Drop log files here or click to select</div>
         <div style="font-size:11px; color:var(--muted);">IntuneManagementExtension.log, AgentExecutor.log, MSI verbose logs (*.log)</div>
         <input type="file" id="logFiles" accept=".log,.txt" multiple style="display:none;">
@@ -2108,7 +2108,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
 
       <div id="settings-preferences">
         <div style="font-weight:600; font-size:14px; margin-bottom:6px;">Customers</div>
-        <div style="font-size:12px; color:var(--muted); margin-bottom:12px;">For MSPs managing multiple tenants. Add each customer with a short code (2–3 letters) — the code is what shows in the dashboard's tenant dropdown so customer names stay off your screenshots. Only the code, the login email, an optional approver list, and optional remediation script IDs (Software Metering and IME Required App Check-in) are stored; no tokens. The dropdown appears once you've added two or more. When you submit a delete on a Multi-Admin-Approval tenant, the dashboard emails the approver list from your own mailbox (uses the <code>Mail.Send</code> scope, consent requested on first use) — so the signed-in account needs an Exchange Online mailbox. Use <strong>✉ Send test</strong> next to an approver list to verify the mail path without deleting anything.</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:12px;">For MSPs managing multiple tenants. Add each customer with a short code (2–3 letters) — the code is what shows in the dashboard's tenant dropdown so customer names stay off your screenshots. Only the code, the login email, an optional approver list, and optional remediation script IDs (Software Metering and IME Required App Check-in) are stored; no tokens. The dropdown appears once you've added two or more. When you submit a delete on a Multi-Admin-Approval tenant, the dashboard emails the approver list from your own mailbox (uses the <code>Mail.Send</code> scope, consent requested on first use) — so the signed-in account needs an Exchange Online mailbox. Use <strong><i class="ph ph-envelope" aria-hidden="true"></i> Send test</strong> next to an approver list to verify the mail path without deleting anything.</div>
 
         <div id="customersList" style="border:1px solid var(--line); border-radius:8px; margin-bottom:12px; background:var(--row-hover);"></div>
 
@@ -2178,11 +2178,11 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
         <div style="font-weight:600; font-size:13px; margin-bottom:8px;">What is cached vs re-fetched</div>
         <div style="font-size:12px; color:var(--ink-2); line-height:1.55;">
           <ul style="margin:0; padding-left:18px;">
-            <li><strong>In-memory (this session)</strong> — each Intune sub-tab keeps its last Graph result until you click <strong>↻ Refresh</strong> on that tab or switch customer/tenant (full reset). Switching browser tabs does not clear it.</li>
+            <li><strong>In-memory (this session)</strong> — each Intune sub-tab keeps its last Graph result until you click <strong><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</strong> on that tab or switch customer/tenant (full reset). Switching browser tabs does not clear it.</li>
             <li><strong>sessionStorage</strong> — MSAL access tokens only (no refresh tokens across browser restarts).</li>
             <li><strong>localStorage</strong> — customers list, Claude/OpenRouter and xAI keys + model, Analyze provider, large-tenant toggles, error-analysis cache. Survives reloads; never uploaded as a blob to our servers (there are none).</li>
             <li><strong>Always live on demand</strong> — MAA approve/reject/complete, app/device deletes, script deploy, mail send, and any action after Cancel mid-walk (partial data stays until Refresh).</li>
-            <li><strong>Long walks</strong> — Hardware device paging + RAM backfill, and Assignments multi-endpoint index, show <strong>✕ Cancel</strong> while running. Cancel keeps whatever already arrived.</li>
+            <li><strong>Long walks</strong> — Hardware device paging + RAM backfill, and Assignments multi-endpoint index, show <strong><i class="ph ph-x" aria-hidden="true"></i> Cancel</strong> while running. Cancel keeps whatever already arrived.</li>
           </ul>
         </div>
       </div>

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { ReportTables } from "../legacy/ReportTables";
 
 export function LegacySlot({ hidden }: { hidden: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -9,5 +10,9 @@ export function LegacySlot({ hidden }: { hidden: boolean }) {
       ref.current.appendChild(node);
     }
   }, []);
-  return <div ref={ref} hidden={hidden} />;
+  return (
+    <div ref={ref} hidden={hidden}>
+      <ReportTables />
+    </div>
+  );
 }
