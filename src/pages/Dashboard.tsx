@@ -11,7 +11,6 @@ import {
   EmptyState,
   ErrorState,
   LoadingState,
-  MetricCard,
   StatusBadge,
   type DataTableColumnDef,
 } from "@ashmore-studios/ui";
@@ -124,7 +123,7 @@ export function Dashboard({ onOpen }: { onOpen: (id: PageId) => void }) {
   return (
     <DashboardPage
       title="Dashboard"
-      description={phase === "loading" ? "Refreshing Microsoft Graph data." : `Last successful refresh ${refreshed}.`}
+      description={phase === "loading" ? "Refreshing Microsoft Graph data" : `Last successful refresh ${refreshed}`}
       actions={<Button variant="outline" onClick={() => onOpen("reports")}>All reports</Button>}
     >
       {snapshot.devices.status === "error" && (
@@ -133,51 +132,63 @@ export function Dashboard({ onOpen }: { onOpen: (id: PageId) => void }) {
           <AlertDescription>{snapshot.devices.message}</AlertDescription>
         </Alert>
       )}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="md:col-span-2">
-          <MetricCard
-            label="Devices requiring attention"
-            tone={devices ? (devices.attention > 0 ? "warning" : "success") : "default"}
-            value={devices ? devices.attention.toLocaleString("en-GB") : "—"}
-            hint={devices ? "Non-compliant, stale for 90 days, or Windows 10" : "Device list unavailable"}
+      <div className="grid items-stretch gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(280px,0.7fr)]">
+        <button
+          type="button"
+          className="flex min-h-72 flex-col justify-between rounded-2xl border bg-card p-8 text-left transition-colors hover:bg-muted/40 disabled:cursor-default"
+          disabled={!devices}
+          onClick={devices ? () => onOpen("hardware") : undefined}
+        >
+          <span className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span className={`size-2 rounded-full ${devices && devices.attention > 0 ? "bg-warning" : "bg-success"}`} aria-hidden="true" />
+            Devices requiring attention
+          </span>
+          <span>
+            <span className="block text-7xl leading-none font-medium tabular-nums tracking-tight">
+              {devices ? devices.attention.toLocaleString("en-GB") : "—"}
+            </span>
+            <span className="mt-4 block max-w-sm text-sm text-muted-foreground">
+              {devices ? "Non-compliant, stale for 90 days, or Windows 10" : "Device list unavailable"}
+            </span>
+          </span>
+        </button>
+        <div className="grid gap-2">
+          <FigureRow
+            label="Managed devices"
+            value={devices ? devices.total.toLocaleString("en-GB") : "—"}
+            hint={devices ? (devices.platforms.slice(0, 2).map((item) => `${item.name} ${item.count}`).join(" · ") || "No platform reported") : "Device list unavailable"}
+            lamp="bg-foreground/35"
+            onClick={devices ? () => onOpen("hardware") : undefined}
+          />
+          <FigureRow
+            label="Compliant"
+            value={devices ? devices.compliant.toLocaleString("en-GB") : "—"}
+            hint={devices ? complianceHint : "Compliance was not returned"}
+            lamp="bg-success"
+            onClick={devices ? () => onOpen("posture") : undefined}
+          />
+          <FigureRow
+            label="Non-compliant"
+            value={devices ? devices.nonCompliant.toLocaleString("en-GB") : "—"}
+            hint={devices ? "Intune compliance state is non-compliant" : "Compliance was not returned"}
+            lamp={devices && devices.nonCompliant > 0 ? "bg-destructive" : "bg-success"}
+            onClick={devices ? () => onOpen("posture") : undefined}
+          />
+          <FigureRow
+            label="Failed installations"
+            value={snapshot.failed.status === "ok" ? snapshot.failed.apps.toLocaleString("en-GB") : "—"}
+            hint={snapshot.failed.status === "ok" ? `${snapshot.failed.failedDeviceTotal.toLocaleString("en-GB")} failed device records` : snapshot.failed.message}
+            lamp={snapshot.failed.status === "ok" && snapshot.failed.apps > 0 ? "bg-destructive" : "bg-success"}
+            onClick={snapshot.failed.status === "ok" ? () => onOpen("failed") : undefined}
+          />
+          <FigureRow
+            label="Stale check-ins"
+            value={devices ? devices.stale.toLocaleString("en-GB") : "—"}
+            hint={devices ? "No check-in, or last check-in over 90 days ago" : "Device list unavailable"}
+            lamp={devices && devices.stale > 0 ? "bg-warning" : "bg-success"}
             onClick={devices ? () => onOpen("hardware") : undefined}
           />
         </div>
-        <MetricCard
-          label="Managed devices"
-          tone="default"
-          value={devices ? devices.total.toLocaleString("en-GB") : "—"}
-          hint={devices ? (devices.platforms.slice(0, 3).map((item) => `${item.name} ${item.count}`).join(" · ") || "No platform reported") : snapshot.devices.status === "error" ? snapshot.devices.message : "Device list unavailable"}
-          onClick={devices ? () => onOpen("hardware") : undefined}
-        />
-        <MetricCard
-          label="Compliant devices"
-          tone={devices ? "success" : "default"}
-          value={devices ? devices.compliant.toLocaleString("en-GB") : "—"}
-          hint={devices ? complianceHint : "Compliance was not returned"}
-          onClick={devices ? () => onOpen("posture") : undefined}
-        />
-        <MetricCard
-          label="Non-compliant devices"
-          tone={devices ? (devices.nonCompliant > 0 ? "destructive" : "success") : "default"}
-          value={devices ? devices.nonCompliant.toLocaleString("en-GB") : "—"}
-          hint={devices ? "Intune compliance state is non-compliant" : "Compliance was not returned"}
-          onClick={devices ? () => onOpen("posture") : undefined}
-        />
-        <MetricCard
-          label="Failed installations"
-          tone={snapshot.failed.status === "ok" ? (snapshot.failed.apps > 0 ? "destructive" : "success") : "default"}
-          value={snapshot.failed.status === "ok" ? snapshot.failed.apps.toLocaleString("en-GB") : "—"}
-          hint={snapshot.failed.status === "ok" ? `${snapshot.failed.failedDeviceTotal.toLocaleString("en-GB")} failed device records` : snapshot.failed.message}
-          onClick={snapshot.failed.status === "ok" ? () => onOpen("failed") : undefined}
-        />
-        <MetricCard
-          label="Stale check-ins"
-          tone={devices ? (devices.stale > 0 ? "warning" : "success") : "default"}
-          value={devices ? devices.stale.toLocaleString("en-GB") : "—"}
-          hint={devices ? "No check-in, or the last check-in was more than 90 days ago" : "Device list unavailable"}
-          onClick={devices ? () => onOpen("hardware") : undefined}
-        />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -285,6 +296,38 @@ export function Dashboard({ onOpen }: { onOpen: (id: PageId) => void }) {
         </CardContent>
       </Card>
     </DashboardPage>
+  );
+}
+
+function FigureRow({
+  label,
+  value,
+  hint,
+  lamp,
+  onClick,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  lamp: string;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="flex items-center justify-between gap-4 rounded-xl border bg-card px-4 py-3 text-left transition-colors hover:bg-muted/40 disabled:cursor-default"
+      disabled={!onClick}
+      onClick={onClick}
+    >
+      <span className="flex min-w-0 items-center gap-3">
+        <span className={`size-2 shrink-0 rounded-full ${lamp}`} aria-hidden="true" />
+        <span className="min-w-0">
+          <span className="block text-sm font-medium">{label}</span>
+          <span className="block truncate text-xs text-muted-foreground">{hint}</span>
+        </span>
+      </span>
+      <span className="text-xl font-medium tabular-nums">{value}</span>
+    </button>
   );
 }
 

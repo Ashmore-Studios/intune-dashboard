@@ -14,38 +14,35 @@ export function SignIn({ ready, error, onSignIn }: { ready: boolean; error: stri
   const dark = resolvedTheme === "dark";
 
   return (
-    <div className="grid h-svh bg-background lg:grid-cols-[1.1fr_0.9fr]">
-      <section className="relative hidden flex-col bg-[#0b0d14] text-[#eef0f5] lg:flex">
-        <div className="flex items-center gap-3 px-8 pt-8">
-          <Mark />
-          <span className="text-base font-medium">Brays Intune</span>
-        </div>
-        <div className="flex flex-1 flex-col justify-center px-8 pb-16">
-          <div className="max-w-md">
-            <h1 className="text-[40px] leading-[1.08] font-medium text-[#eef0f5]">
-              Intune reports for this tenant
-            </h1>
-            <p className="mt-4 max-w-sm text-base leading-6 text-[#a3a9b8]">
-              Devices, applications and security, read from Microsoft Graph
-            </p>
+    <div className="grid min-h-svh md:h-svh md:grid-cols-[minmax(0,1.15fr)_minmax(380px,0.85fr)]">
+      <section className="flex flex-col justify-center bg-[#0b0d14] px-8 py-10 text-[#eef0f5] md:px-12">
+        <div className="mx-auto w-full max-w-lg">
+          <div className="flex items-center gap-3">
+            <Mark />
+            <span className="text-base font-medium">Brays Intune</span>
           </div>
-          <ul className="mt-10 grid max-w-lg grid-cols-2 gap-x-8 gap-y-4">
+          <h1 className="mt-10 text-[32px] leading-[1.08] font-medium text-[#eef0f5] md:text-[44px]">
+            Intune reports for this tenant
+          </h1>
+          <p className="mt-4 max-w-sm text-base leading-6 text-[#a3a9b8]">
+            Devices, applications and security, read from Microsoft Graph
+          </p>
+          <ul className="mt-8 grid grid-cols-2 gap-x-8 gap-y-5 border-t border-white/10 pt-8">
             {areas.map(([title, detail]) => (
               <li key={title} className="min-w-0">
-                <p className="text-sm font-medium text-[#eef0f5]">{title}</p>
-                <p className="mt-1 text-xs leading-4 text-[#7a8296]">{detail}</p>
+                <p className="flex items-center gap-2 text-sm font-medium text-[#eef0f5]">
+                  <span className="size-1.5 shrink-0 rounded-full bg-[#3d91f3]" aria-hidden="true" />
+                  {title}
+                </p>
+                <p className="mt-1 pl-3.5 text-xs leading-4 text-[#7a8296]">{detail}</p>
               </li>
             ))}
           </ul>
         </div>
       </section>
 
-      <section className="relative flex min-h-0 flex-col bg-background text-foreground">
-        <div className="flex items-center justify-between px-6 pt-6 lg:justify-end">
-          <div className="flex items-center gap-2 lg:hidden">
-            <Mark className="size-7" />
-            <span className="font-medium">Brays Intune</span>
-          </div>
+      <section className="relative flex min-h-0 flex-col border-l border-black/10 bg-[#eef0f3] text-[#14161c] dark:border-white/10 dark:bg-[#343a46] dark:text-[#eef0f5]">
+        <div className="flex justify-end px-6 pt-6">
           <Button
             variant="ghost"
             size="icon"
