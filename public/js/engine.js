@@ -220,7 +220,7 @@ function showDetail(row) {
   `;
 
   if (row._twin) {
-    html += `<div class="dedup-note"><i class="ph ph-info" aria-hidden="true"></i>️ This app is also registered under <code>${esc(row._twin.RegistryPath)}</code>. Mirroring is normal for installers that target both 32-bit and 64-bit consumers.</div>`;
+    html += `<div class="dedup-note"><i class="ph ph-info" aria-hidden="true"></i> This app is also registered under <code>${esc(row._twin.RegistryPath)}</code>. Mirroring is normal for installers that target both 32-bit and 64-bit consumers.</div>`;
   }
 
   if (row.UninstallString || row.QuietUninstallString) {
@@ -463,7 +463,7 @@ function appAssignmentTableHtml(rows, mode) {
       <td>${esc(a.platform) || '—'}</td>
       <td>${contextBadgeHtml(a.runAs)}</td>
       ${last}
-      <td style="text-align:right; white-space:nowrap;"><a href="${appPortalUrl(a.id)}" target="_blank" rel="noopener noreferrer" class="pub-small" style="color:var(--accent); text-decoration:none;">Open ↗</a></td>
+      <td style="text-align:right; white-space:nowrap;"><a href="${appPortalUrl(a.id)}" target="_blank" rel="noopener noreferrer" class="pub-small" style="color:var(--accent); text-decoration:none;"><i class="ph ph-arrow-square-out" aria-hidden="true"></i> Open</a></td>
     </tr>`;
   }).join('');
   return `<div class="table-scroll"><table class="app-assign-table">
@@ -1929,7 +1929,7 @@ function renderFailed() {
         <td></td>
         <td class="version">${esc(r.AppVersion) || '—'}</td>
         <td></td>
-        <td style="color:var(--muted); font-size:11px;">↳ session</td>
+        <td style="color:var(--muted); font-size:11px;"><i class="ph ph-arrow-elbow-down-right" aria-hidden="true"></i> session</td>
         <td class="pub">${esc(r.UserPrincipalName) || '<em>(no user — system)</em>'}</td>
         <td>${fiStateBadge(r)}</td>
         ${errCellFor(r)}
@@ -2217,7 +2217,7 @@ function selectAppInstalled(app) {
   $('installedAppPicker').style.display = 'none';
   $('installedView').style.display = '';
   const portalUrl = `https://intune.microsoft.com/#view/Microsoft_Intune_Apps/SettingsMenu/~/0/appId/${encodeURIComponent(app.id)}`;
-  $('instAppName').innerHTML = `<a href="${portalUrl}" target="_blank" rel="noopener noreferrer" style="color:inherit; text-decoration:none;" title="Open in Intune admin center">${esc(app.displayName)} ↗</a>`;
+  $('instAppName').innerHTML = `<a href="${portalUrl}" target="_blank" rel="noopener noreferrer" style="color:inherit; text-decoration:none;" title="Open in Intune admin center">${esc(app.displayName)} <i class="ph ph-arrow-square-out" aria-hidden="true"></i></a>`;
   const bits = [app.publisher || '—', platformLabel(app.platform)];
   if (app.runAs) bits.push(app.runAs === 'system' ? 'SYSTEM' : app.runAs === 'user' ? 'USER' : app.runAs);
   $('instAppMeta').textContent = bits.filter(Boolean).join(' · ');
@@ -5291,7 +5291,7 @@ function renderAppverDrillRows() {
       ${assignCell}
       <td class="date">${esc(fmtIntuneDate(p.created))}</td>
       <td style="white-space:nowrap;">
-        <a href="${url}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none; font-weight:600; font-size:12px;">Open ↗</a>
+        <a href="${url}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none; font-weight:600; font-size:12px;"><i class="ph ph-arrow-square-out" aria-hidden="true"></i> Open</a>
         <span class="appver-del" data-appver-pkg="${esc(p.id)}" title="Delete this package from Intune" style="cursor:pointer; color:var(--bad-ink); font-weight:700; font-size:13px; margin-left:10px;"><i class="ph ph-trash" aria-hidden="true"></i></span>
       </td>
     </tr>`;
@@ -10534,7 +10534,7 @@ function renderPostureDetail(kind) {
       : 'Legacy auth is blocked';
     if (postureCa.legacyAuthNotBlocked) {
       tableHtml = `<div class="meta" style="padding:18px;">No enabled Conditional Access policy was found that blocks <code>exchangeActiveSync</code> + <code>other</code> (legacy clients). Create a Block legacy authentication policy in Entra.
-        <div style="margin-top:10px;"><a href="${CA_BLADE}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">Open Conditional Access policies ↗</a></div></div>`;
+        <div style="margin-top:10px;"><a href="${CA_BLADE}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);"><i class="ph ph-arrow-square-out" aria-hidden="true"></i> Open Conditional Access policies</a></div></div>`;
     } else {
       tableHtml = `<table><thead><tr><th>Blocking policy</th><th>State</th><th>Last modified</th></tr></thead><tbody>${postureCa.legacyBlockers.map(r => `
           <tr>
