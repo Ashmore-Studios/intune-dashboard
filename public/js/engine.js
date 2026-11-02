@@ -240,8 +240,8 @@ function showDetail(row) {
     btn.addEventListener('click', () => {
       const text = btn.dataset.cmd === 'std' ? row.UninstallString : row.QuietUninstallString;
       navigator.clipboard.writeText(text);
-      btn.textContent = '<i class="ph ph-check" aria-hidden="true"></i> Copied';
-      setTimeout(() => btn.textContent = 'Copy', 1500);
+      btn.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i> Copied';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
     });
   });
 
@@ -2363,9 +2363,9 @@ function copyInstalledNames() {
   const names = rows.map(r => r.DeviceName).filter(Boolean).join('\n');
   navigator.clipboard.writeText(names).then(() => {
     const btn = $('btnCopyInstalled');
-    const orig = btn.textContent;
-    btn.textContent = `<i class="ph ph-check" aria-hidden="true"></i> Copied ${rows.length}`;
-    setTimeout(() => { btn.textContent = orig; }, 1500);
+    const orig = btn.innerHTML;
+    btn.innerHTML = `<i class="ph ph-check" aria-hidden="true"></i> Copied ${rows.length}`;
+    setTimeout(() => { btn.innerHTML = orig; }, 1500);
   });
 }
 
@@ -5302,7 +5302,7 @@ function renderAppverDrillRows() {
   sa.indeterminate = selCount > 0 && selCount < a.packages.length;
   const btn = $('btnAppverDeleteSel');
   btn.style.display = selCount ? '' : 'none';
-  btn.textContent = `<i class="ph ph-trash" aria-hidden="true"></i> Delete Selected (${selCount})`;
+  btn.innerHTML = `<i class="ph ph-trash" aria-hidden="true"></i> Delete Selected (${selCount})`;
 }
 
 function exportAppverCSV() {
@@ -5421,7 +5421,7 @@ async function deleteSelectedAppverPackages() {
   const deleted = [], queued = [], failed = [];
   for (let i = 0; i < targets.length; i++) {
     const p = targets[i];
-    btn.textContent = `<i class="ph ph-trash" aria-hidden="true"></i> Deleting ${i + 1}/${targets.length}…`;
+    btn.innerHTML = `<i class="ph ph-trash" aria-hidden="true"></i> Deleting ${i + 1}/${targets.length}…`;
     const attempt = (headers = {}) => graphDelete('beta/deviceAppManagement/mobileApps/' + encodeURIComponent(p.id), { token, headers });
     try {
       await attempt(maaJustB64 ? { 'x-msft-approval-justification': maaJustB64 } : {});
@@ -5483,12 +5483,12 @@ async function deleteSelectedAppverPackages() {
     }
   }
 
-  const label = p => `${p.displayName}${p.version ? ' ' + p.version : ''}`;
+  const label = p => esc(`${p.displayName}${p.version ? ' ' + p.version : ''}`);
   const skipped = targets.length - deleted.length - queued.length - failed.length;
   const parts = [];
   if (deleted.length) parts.push(`<i class="ph ph-check" aria-hidden="true"></i> Deleted ${deleted.length}: ${deleted.map(label).join(', ')}`);
   if (queued.length) parts.push(`<i class="ph ph-hourglass" aria-hidden="true"></i> ${queued.length} submitted for Multi-Admin Approval — approve under Tenant administration → Multi Admin Approval: ${queued.map(label).join(', ')}`);
-  if (failed.length) parts.push(`<i class="ph ph-x" aria-hidden="true"></i> ${failed.length} failed: ${failed.map(f => `${label(f.p)} (${f.error})`).join('; ')}`);
+  if (failed.length) parts.push(`<i class="ph ph-x" aria-hidden="true"></i> ${failed.length} failed: ${failed.map(f => `${label(f.p)} (${esc(f.error)})`).join('; ')}`);
   if (skipped > 0) parts.push(`${cancelled ? 'Justification cancelled — ' : ''}${skipped} package${skipped === 1 ? '' : 's'} not attempted.`);
   const cls = (failed.length || cancelled) ? 'error-banner' : 'notice-banner';
 
@@ -5499,7 +5499,7 @@ async function deleteSelectedAppverPackages() {
   // re-render to clear the checkboxes and reset the button label.
   if (deleted.length) await loadAppversions(true);
   else renderAppverDrillRows();
-  $('appversionsError').innerHTML = parts.length ? `<div class="${cls}">${parts.map(x => esc(x)).join('<br>')}</div>` : '';
+  $('appversionsError').innerHTML = parts.length ? `<div class="${cls}">${parts.join('<br>')}</div>` : '';
 }
 
 document.querySelectorAll('[data-sort-appver]').forEach(th => {
@@ -6104,7 +6104,17 @@ function imeToast(msg, kind) {
   const t = document.createElement('div');
   const bg = kind === 'bad' ? '#c0392b' : (kind === 'ok' ? '#1f7a3a' : '#333');
   t.style.cssText = `background:${bg}; color:#fff; padding:10px 14px; border-radius:8px; font-size:13px; box-shadow:0 4px 14px rgba(0,0,0,.2); line-height:1.5;`;
-  t.textContent = msg;
+  for (const part of String(msg).split(/(<i class="ph(?:-fill)? ph-[a-z0-9-]+"[^>]*><\/i>)/)) {
+    const icon = part.match(/^<i class="(ph(?:-fill)? ph-[a-z0-9-]+)"/);
+    if (icon) {
+      const el = document.createElement('i');
+      el.className = icon[1];
+      el.setAttribute('aria-hidden', 'true');
+      t.appendChild(el);
+    } else if (part) {
+      t.appendChild(document.createTextNode(part));
+    }
+  }
   host.appendChild(t);
   setTimeout(() => { t.style.transition = 'opacity .4s'; t.style.opacity = '0'; setTimeout(() => t.remove(), 400); }, 6500);
 }
@@ -6271,9 +6281,9 @@ async function forceImeCheckin(deviceId, deviceName, triggerEl) {
   }
   const label = deviceName || deviceId;
 
-  const original = triggerEl ? triggerEl.textContent : null;
-  const setBusy = (txt) => { if (triggerEl) { triggerEl.textContent = txt; triggerEl.style.pointerEvents = 'none'; } };
-  const restore = () => { if (triggerEl) { triggerEl.textContent = original; triggerEl.style.pointerEvents = ''; } };
+  const original = triggerEl ? triggerEl.innerHTML : null;
+  const setBusy = (txt) => { if (triggerEl) { triggerEl.innerHTML = txt; triggerEl.style.pointerEvents = 'none'; } };
+  const restore = () => { if (triggerEl) { triggerEl.innerHTML = original; triggerEl.style.pointerEvents = ''; } };
 
   // Acquire the privileged-ops token FIRST, before any confirm() or network
   // work — MSAL's consent popup must open within the click's transient user
@@ -6316,7 +6326,7 @@ async function forceImeCheckin(deviceId, deviceName, triggerEl) {
     }
     if (!res.ok && res.status !== 204) { const t = await res.text(); const err = new Error('Graph ' + res.status + ': ' + t); err.status = res.status; throw err; }
     imeToast(`<i class="ph ph-check" aria-hidden="true"></i> Check-in sent to ${label}. If the device is online it runs within ~10s; results report back shortly.`, 'ok');
-    if (triggerEl) { triggerEl.textContent = '<i class="ph ph-check" aria-hidden="true"></i> Sent'; setTimeout(restore, 4000); }
+    if (triggerEl) { triggerEl.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i> Sent'; setTimeout(restore, 4000); }
     loadImeRunActivity(true); // results lag a few minutes, but refresh so the count catches up
 
   } catch (e) {
@@ -6937,10 +6947,10 @@ async function bulkApprovalAction(action) {
   }
 
   const parts = [];
-  if (succeeded.length) parts.push(`<i class="ph ph-check" aria-hidden="true"></i> ${succeeded.length} ${{ approve: 'approved', reject: 'rejected', cancel: 'cancelled', complete: 'completed' }[action] || action}`);
-  if (failed.length) parts.push(`<i class="ph ph-x" aria-hidden="true"></i> ${failed.length} failed: ${failed.map(f => f.error).join('; ')}`);
+  if (succeeded.length) parts.push(`<i class="ph ph-check" aria-hidden="true"></i> ${succeeded.length} ${esc({ approve: 'approved', reject: 'rejected', cancel: 'cancelled', complete: 'completed' }[action] || action)}`);
+  if (failed.length) parts.push(`<i class="ph ph-x" aria-hidden="true"></i> ${failed.length} failed: ${esc(failed.map(f => f.error).join('; '))}`);
   const cls = failed.length ? 'error-banner' : 'notice-banner';
-  $('approvalsError').innerHTML = parts.length ? `<div class="${cls}">${esc(parts.join(' · '))}</div>` : '';
+  $('approvalsError').innerHTML = parts.length ? `<div class="${cls}">${parts.join(' · ')}</div>` : '';
   loadApprovals(true);
 }
 
@@ -8038,7 +8048,7 @@ function renderAutopilotTable() {
     sa.checked = allOn;
     sa.indeterminate = selectedHere > 0 && !allOn;
     $('btnAutopilotSelectAll').textContent = allOn ? 'Clear selection' : 'Select all';
-    $('btnAutopilotDelete').textContent = selectedHere ? `<i class="ph ph-trash" aria-hidden="true"></i> Delete selected (${selectedHere})` : '<i class="ph ph-trash" aria-hidden="true"></i> Delete selected';
+    $('btnAutopilotDelete').innerHTML = selectedHere ? `<i class="ph ph-trash" aria-hidden="true"></i> Delete selected (${selectedHere})` : '<i class="ph ph-trash" aria-hidden="true"></i> Delete selected';
   }
 }
 
@@ -8083,7 +8093,7 @@ async function deleteSelectedAutopilotOrphans() {
   const deleted = [], queued = [], failed = [];
   for (let i = 0; i < targets.length; i++) {
     const r = targets[i];
-    btn.textContent = `<i class="ph ph-trash" aria-hidden="true"></i> Deleting ${i + 1}/${targets.length}…`;
+    btn.innerHTML = `<i class="ph ph-trash" aria-hidden="true"></i> Deleting ${i + 1}/${targets.length}…`;
     const attempt = (headers = {}) => graphDelete('beta/deviceManagement/windowsAutopilotDeviceIdentities/' + encodeURIComponent(r.id), { token, headers });
     try {
       await attempt(maaJustB64 ? { 'x-msft-approval-justification': maaJustB64 } : {});
@@ -9142,10 +9152,10 @@ function renderCerthealthTable() {
   const totalSel = certhealthRows.filter(r => chSelected.has(r.id)).length;
   const delBtn = $('btnCerthealthDelete');
   delBtn.style.display = totalSel ? '' : 'none';
-  delBtn.textContent = `<i class="ph ph-trash" aria-hidden="true"></i> Delete selected (${totalSel})`;
+  delBtn.innerHTML = `<i class="ph ph-trash" aria-hidden="true"></i> Delete selected (${totalSel})`;
   const wipeBtn = $('btnCerthealthWipe');
   wipeBtn.style.display = totalSel ? '' : 'none';
-  wipeBtn.textContent = `<i class="ph ph-warning" aria-hidden="true"></i> Wipe selected (${totalSel})`;
+  wipeBtn.innerHTML = `<i class="ph ph-warning" aria-hidden="true"></i> Wipe selected (${totalSel})`;
 }
 
 function buildMaaDeviceEmailHtml({ action, devices, account, upn, customer, maaJust }) {
@@ -9199,7 +9209,7 @@ async function deleteSelectedCerthealthDevices() {
   const deleted = [], queued = [], failed = [];
   for (let i = 0; i < targets.length; i++) {
     const r = targets[i];
-    btn.textContent = `<i class="ph ph-trash" aria-hidden="true"></i> Deleting ${i + 1}/${targets.length}…`;
+    btn.innerHTML = `<i class="ph ph-trash" aria-hidden="true"></i> Deleting ${i + 1}/${targets.length}…`;
     const attempt = (headers = {}) => graphDelete('beta/deviceManagement/managedDevices/' + encodeURIComponent(r.id), { token, headers });
     try {
       await attempt(maaJustB64 ? { 'x-msft-approval-justification': maaJustB64 } : {});
@@ -9234,12 +9244,12 @@ async function deleteSelectedCerthealthDevices() {
 
   const skipped = targets.length - deleted.length - queued.length - failed.length;
   const parts = [];
-  if (deleted.length) parts.push(`<i class="ph ph-check" aria-hidden="true"></i> Deleted ${deleted.length}: ${deleted.map(r => r.deviceName || r.id).join(', ')}`);
-  if (queued.length) parts.push(`<i class="ph ph-hourglass" aria-hidden="true"></i> ${queued.length} submitted for Multi-Admin Approval — approve under Tenant administration → Multi Admin Approval: ${queued.map(r => r.deviceName || r.id).join(', ')}`);
-  if (failed.length) parts.push(`<i class="ph ph-x" aria-hidden="true"></i> ${failed.length} failed: ${failed.map(f => `${f.r.deviceName || f.r.id} (${f.error})`).join('; ')}`);
+  if (deleted.length) parts.push(`<i class="ph ph-check" aria-hidden="true"></i> Deleted ${deleted.length}: ${deleted.map(r => esc(r.deviceName || r.id)).join(', ')}`);
+  if (queued.length) parts.push(`<i class="ph ph-hourglass" aria-hidden="true"></i> ${queued.length} submitted for Multi-Admin Approval — approve under Tenant administration → Multi Admin Approval: ${queued.map(r => esc(r.deviceName || r.id)).join(', ')}`);
+  if (failed.length) parts.push(`<i class="ph ph-x" aria-hidden="true"></i> ${failed.length} failed: ${failed.map(f => `${esc(f.r.deviceName || f.r.id)} (${esc(f.error)})`).join('; ')}`);
   if (skipped > 0) parts.push(`${cancelled ? 'Justification cancelled — ' : ''}${skipped} device${skipped === 1 ? '' : 's'} not attempted.`);
   const cls = (failed.length || cancelled) ? 'error-banner' : 'notice-banner';
-  $('certhealthError').innerHTML = parts.length ? `<div class="${cls}">${parts.map(p => esc(p)).join('<br>')}</div>` : '';
+  $('certhealthError').innerHTML = parts.length ? `<div class="${cls}">${parts.join('<br>')}</div>` : '';
 
   // Send MAA approver notification for queued device deletes (same pattern as
   // the app-catalog delete flow). Non-blocking — mail failure must not affect
@@ -9305,7 +9315,7 @@ async function wipeSelectedCerthealthDevices() {
   const succeeded = [], queued = [], failed = [];
   for (let i = 0; i < targets.length; i++) {
     const r = targets[i];
-    btn.textContent = `<i class="ph ph-warning" aria-hidden="true"></i> Wiping ${i + 1}/${targets.length}…`;
+    btn.innerHTML = `<i class="ph ph-warning" aria-hidden="true"></i> Wiping ${i + 1}/${targets.length}…`;
     const attempt = (extraHeaders = {}) => graphPost(
       'beta/deviceManagement/managedDevices/' + encodeURIComponent(r.id) + '/wipe',
       { keepEnrollmentData: false, keepUserData: false },
@@ -9342,12 +9352,12 @@ async function wipeSelectedCerthealthDevices() {
 
   const skipped = targets.length - succeeded.length - queued.length - failed.length;
   const parts = [];
-  if (succeeded.length) parts.push(`<i class="ph ph-check" aria-hidden="true"></i> Wipe issued to ${succeeded.length}: ${succeeded.map(r => r.deviceName || r.id).join(', ')}`);
-  if (queued.length) parts.push(`<i class="ph ph-hourglass" aria-hidden="true"></i> ${queued.length} submitted for Multi-Admin Approval — approve under Tenant administration → Multi Admin Approval: ${queued.map(r => r.deviceName || r.id).join(', ')}`);
-  if (failed.length) parts.push(`<i class="ph ph-x" aria-hidden="true"></i> ${failed.length} failed: ${failed.map(f => `${f.r.deviceName || f.r.id} (${f.error})`).join('; ')}`);
+  if (succeeded.length) parts.push(`<i class="ph ph-check" aria-hidden="true"></i> Wipe issued to ${succeeded.length}: ${succeeded.map(r => esc(r.deviceName || r.id)).join(', ')}`);
+  if (queued.length) parts.push(`<i class="ph ph-hourglass" aria-hidden="true"></i> ${queued.length} submitted for Multi-Admin Approval — approve under Tenant administration → Multi Admin Approval: ${queued.map(r => esc(r.deviceName || r.id)).join(', ')}`);
+  if (failed.length) parts.push(`<i class="ph ph-x" aria-hidden="true"></i> ${failed.length} failed: ${failed.map(f => `${esc(f.r.deviceName || f.r.id)} (${esc(f.error)})`).join('; ')}`);
   if (skipped > 0) parts.push(`${cancelled ? 'Justification cancelled — ' : ''}${skipped} device${skipped === 1 ? '' : 's'} not attempted.`);
   const cls = (failed.length || cancelled) ? 'error-banner' : 'notice-banner';
-  $('certhealthError').innerHTML = parts.length ? `<div class="${cls}">${parts.map(p => esc(p)).join('<br>')}</div>` : '';
+  $('certhealthError').innerHTML = parts.length ? `<div class="${cls}">${parts.join('<br>')}</div>` : '';
 
   if (queued.length) {
     try {
