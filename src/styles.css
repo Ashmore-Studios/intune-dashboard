@@ -3,31 +3,26 @@
 @source "../node_modules/@ashmore-studios/ui/dist";
 @import "../public/css/dashboard.css";
 
-html,
-body,
-#root {
-  height: 100%;
-}
-html {
-  overflow: hidden;
-}
-body {
-  margin: 0;
-  overflow: hidden;
-  background: var(--background);
-  color: var(--foreground);
-  font-family: "Outfit", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-body::before {
-  display: none !important;
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
-#legacy-root {
-  color: var(--foreground);
+:root {
+  --surface-muted: var(--muted);
 }
+
+html {
+  @apply overflow-hidden;
+}
+body {
+  @apply overflow-hidden bg-background font-sans text-foreground;
+}
+body::before {
+  @apply hidden!;
+}
+
 #legacy-root .container {
-  max-width: none;
-  padding: 8px 8px 48px;
+  @apply max-w-none px-2 pt-2 pb-12;
 }
 #legacy-root .container > .eyebrow,
 #legacy-root .container > h1,
@@ -37,32 +32,13 @@ body::before {
 #legacy-root .auth-bar,
 #legacy-root #themeToggle,
 #legacy-root #intuneSubOverview {
-  display: none !important;
+  @apply hidden!;
 }
 
 .ops-nav[data-collapsed="true"] .ops-brand,
 .ops-nav[data-collapsed="true"] h2,
 .ops-nav[data-collapsed="true"] li span.truncate {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-[data-theme="dark"] #legacy-root .error-banner {
-  background: var(--bad-bg);
-  border-color: var(--bad-border);
-  color: var(--bad-ink);
-}
-[data-theme="dark"] #legacy-root .notice-banner {
-  background: var(--good-bg);
-  border-color: var(--good-border);
-  color: var(--good-ink);
+  @apply sr-only;
 }
 
 /* Brays Pipelines: navy for light surfaces, logo blue for dark. Both clear WCAG AA. */
@@ -81,4 +57,100 @@ body::before {
   --sidebar-primary: #3d91f3;
   --sidebar-primary-foreground: #0d1b2e;
   --sidebar-ring: #3d91f3;
+}
+
+/* Legacy report markup keeps its class names. These utilities are the Ashmore components. */
+#legacy-root,
+[data-theme="dark"] #legacy-root {
+  --bg: var(--background);
+  --ink: var(--foreground);
+  --ink-2: var(--muted-foreground);
+  --muted: var(--muted-foreground);
+  --line: var(--border);
+  --row-hover: color-mix(in oklch, var(--foreground) 5%, transparent);
+  --btn-solid-bg: var(--primary);
+  --btn-solid-bg-hover: color-mix(in oklch, var(--primary) 88%, black);
+  --btn-solid-fg: var(--primary-foreground);
+  --danger: var(--destructive);
+  --font-body: inherit;
+  --font-display: inherit;
+  @apply bg-transparent text-foreground;
+}
+#legacy-root .btn {
+  @apply h-9 rounded-md px-4 text-sm font-medium;
+}
+#legacy-root .btn-ghost {
+  @apply border border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground;
+}
+#legacy-root .btn-danger {
+  @apply border-transparent bg-destructive text-destructive-foreground;
+}
+#legacy-root .btn-danger:hover:not(:disabled) {
+  @apply border-transparent bg-[color-mix(in_oklch,var(--destructive)_88%,black)];
+}
+#legacy-root .search,
+#legacy-root select.search,
+#legacy-root textarea,
+#legacy-root .filter-select {
+  @apply h-9 rounded-md border border-border bg-transparent text-sm text-foreground shadow-xs;
+}
+#legacy-root textarea {
+  @apply h-auto min-h-24;
+}
+#legacy-root .search:focus,
+#legacy-root select.search:focus,
+#legacy-root textarea:focus,
+#legacy-root .filter-select:focus {
+  @apply border-ring ring-3 ring-ring/50 outline-none;
+}
+#legacy-root .table-card,
+#legacy-root .tile,
+#legacy-root .modal,
+#legacy-root .selected-app,
+#legacy-root .donut-card {
+  @apply rounded-xl border border-border bg-card text-card-foreground shadow-sm;
+}
+#legacy-root .tile:hover {
+  @apply transform-none;
+}
+#legacy-root .table-toolbar {
+  @apply border-border;
+}
+#legacy-root .table-toolbar h2 {
+  @apply text-base font-semibold tracking-normal;
+}
+#legacy-root thead th {
+  @apply bg-[var(--surface-muted)] text-xs font-medium tracking-normal text-muted-foreground normal-case;
+}
+#legacy-root tbody td {
+  @apply text-sm;
+}
+#legacy-root .tab-hint,
+#legacy-root .notice-banner {
+  @apply rounded-md border border-border border-l-[3px] border-l-primary bg-[var(--surface-muted)] text-foreground;
+}
+#legacy-root .error-banner {
+  @apply rounded-md border border-destructive/35 bg-destructive/10 text-destructive;
+}
+#legacy-root .modal-backdrop {
+  @apply bg-foreground/45;
+}
+#legacy-root .modal-header,
+#legacy-root .footer-count {
+  @apply border-border bg-transparent;
+}
+#legacy-root .pager .page-btn {
+  @apply rounded-md border border-border bg-background text-foreground;
+}
+#legacy-root .pager .page-btn.active {
+  @apply border-primary bg-primary font-semibold text-primary-foreground;
+}
+#legacy-root a {
+  @apply text-primary;
+}
+#legacy-root code {
+  @apply rounded-sm bg-[var(--surface-muted)] px-1 py-px text-[0.85em];
+}
+#legacy-root #viewSettings .table-card > div > div:first-child {
+  @apply text-sm font-medium;
 }

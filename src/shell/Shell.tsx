@@ -129,8 +129,7 @@ export function Shell({
   return (
     <div className="flex h-svh w-full bg-background">
       <div
-        className="hidden h-svh shrink-0 border-r border-sidebar-border md:flex"
-        style={{ width: collapsed ? "4.5rem" : "16rem" }}
+        className={`hidden h-svh shrink-0 border-r border-sidebar-border md:flex ${collapsed ? "w-18" : "w-64"}`}
       >
         <Sidebar className="ops-nav" data-collapsed={collapsed ? "true" : "false"}>
           <SidebarHeader>
