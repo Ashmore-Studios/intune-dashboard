@@ -53,10 +53,10 @@ npm run dev
 The Entra redirect URI remains `window.location.origin + window.location.pathname`, so a local dev server only works if that exact origin is registered on the existing application. Production keeps the deployed HTTPS hostname.
 
 ### Docker
-The image is a multi-stage build: Node compiles the static assets, Nginx serves them. Private package install uses a BuildKit secret mounted at `/root/.npmrc`, or a build argument `GH_PACKAGES_TOKEN` when the host cannot pass a secret. Do not commit that token.
+The image is a multi-stage build: Node compiles the static assets, Nginx serves them. `@ashmore-studios/ui` is installed from GitHub Packages during the build. Set `GH_PACKAGES_TOKEN` to a GitHub token with `read:packages` (and organisation access, if the token is SSO-controlled). Dokploy reads that from the application environment. Do not commit the token. A local BuildKit secret still works with `docker build --secret id=npmrc,src=$HOME/.npmrc`.
 
 ```bash
-docker compose build
+GH_PACKAGES_TOKEN=… docker compose build
 ```
 
 ---

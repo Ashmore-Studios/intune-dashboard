@@ -6,6 +6,10 @@ COPY package.json package-lock.json .npmrc ./
 ARG GH_PACKAGES_TOKEN
 RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
     if [ -n "$GH_PACKAGES_TOKEN" ]; then printf '\n//npm.pkg.github.com/:_authToken=%s\n' "$GH_PACKAGES_TOKEN" >> .npmrc; fi && \
+    if [ ! -s /root/.npmrc ] && ! grep -q _authToken .npmrc; then \
+      echo "GitHub Packages auth is missing. Set GH_PACKAGES_TOKEN to a token with read:packages." >&2; \
+      exit 1; \
+    fi && \
     npm ci && \
     sed -i '/_authToken/d' .npmrc
 COPY . .

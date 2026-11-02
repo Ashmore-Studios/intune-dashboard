@@ -3,12 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      secrets:
-        - npmrc
+      args:
+        GH_PACKAGES_TOKEN: ${GH_PACKAGES_TOKEN:-}
     restart: unless-stopped
     expose:
       - "80"
-
-secrets:
-  npmrc:
-    file: ${HOME}/.npmrc
