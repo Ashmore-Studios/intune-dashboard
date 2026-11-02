@@ -12,7 +12,6 @@ import {
   ErrorState,
   LoadingState,
   MetricCard,
-  MetricGrid,
   StatusBadge,
   type DataTableColumnDef,
 } from "@ashmore-studios/ui";
@@ -134,50 +133,52 @@ export function Dashboard({ onOpen }: { onOpen: (id: PageId) => void }) {
           <AlertDescription>{snapshot.devices.message}</AlertDescription>
         </Alert>
       )}
-      <MetricGrid>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="md:col-span-2">
+          <MetricCard
+            label="Devices requiring attention"
+            tone={devices ? (devices.attention > 0 ? "warning" : "success") : "default"}
+            value={devices ? devices.attention.toLocaleString("en-GB") : "—"}
+            hint={devices ? "Non-compliant, stale for 90 days, or Windows 10" : "Device list unavailable"}
+            onClick={devices ? () => onOpen("hardware") : undefined}
+          />
+        </div>
         <MetricCard
           label="Managed devices"
           tone="default"
           value={devices ? devices.total.toLocaleString("en-GB") : "—"}
-          hint={devices ? (devices.platforms.slice(0, 3).map((item) => `${item.name} ${item.count}`).join(" · ") || "No platform reported") : snapshot.devices.status === "error" ? snapshot.devices.message : "Device list unavailable."}
+          hint={devices ? (devices.platforms.slice(0, 3).map((item) => `${item.name} ${item.count}`).join(" · ") || "No platform reported") : snapshot.devices.status === "error" ? snapshot.devices.message : "Device list unavailable"}
           onClick={devices ? () => onOpen("hardware") : undefined}
         />
         <MetricCard
           label="Compliant devices"
           tone={devices ? "success" : "default"}
           value={devices ? devices.compliant.toLocaleString("en-GB") : "—"}
-          hint={devices ? complianceHint : "Compliance was not returned."}
+          hint={devices ? complianceHint : "Compliance was not returned"}
           onClick={devices ? () => onOpen("posture") : undefined}
         />
         <MetricCard
           label="Non-compliant devices"
           tone={devices ? (devices.nonCompliant > 0 ? "destructive" : "success") : "default"}
           value={devices ? devices.nonCompliant.toLocaleString("en-GB") : "—"}
-          hint={devices ? "Intune compliance state is non-compliant." : "Compliance was not returned."}
+          hint={devices ? "Intune compliance state is non-compliant" : "Compliance was not returned"}
           onClick={devices ? () => onOpen("posture") : undefined}
         />
         <MetricCard
           label="Failed installations"
           tone={snapshot.failed.status === "ok" ? (snapshot.failed.apps > 0 ? "destructive" : "success") : "default"}
           value={snapshot.failed.status === "ok" ? snapshot.failed.apps.toLocaleString("en-GB") : "—"}
-          hint={snapshot.failed.status === "ok" ? `${snapshot.failed.failedDeviceTotal.toLocaleString("en-GB")} failed device records.` : snapshot.failed.message}
+          hint={snapshot.failed.status === "ok" ? `${snapshot.failed.failedDeviceTotal.toLocaleString("en-GB")} failed device records` : snapshot.failed.message}
           onClick={snapshot.failed.status === "ok" ? () => onOpen("failed") : undefined}
-        />
-        <MetricCard
-          label="Devices requiring attention"
-          tone={devices ? (devices.attention > 0 ? "warning" : "success") : "default"}
-          value={devices ? devices.attention.toLocaleString("en-GB") : "—"}
-          hint={devices ? "Non-compliant, stale for 90 days, or Windows 10." : "Device list unavailable."}
-          onClick={devices ? () => onOpen("hardware") : undefined}
         />
         <MetricCard
           label="Stale check-ins"
           tone={devices ? (devices.stale > 0 ? "warning" : "success") : "default"}
           value={devices ? devices.stale.toLocaleString("en-GB") : "—"}
-          hint={devices ? "No check-in, or the last check-in was more than 90 days ago." : "Device list unavailable."}
+          hint={devices ? "No check-in, or the last check-in was more than 90 days ago" : "Device list unavailable"}
           onClick={devices ? () => onOpen("hardware") : undefined}
         />
-      </MetricGrid>
+      </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Card>
@@ -310,7 +311,7 @@ function SecurityLine({
     <div className="flex items-start justify-between gap-3 border-b pb-3 last:border-b-0 last:pb-0">
       <div>
         <div className="text-sm font-medium">{label}</div>
-        <div className="text-2xl font-semibold tracking-tight">{value.value}</div>
+        <div className="text-2xl font-medium tabular-nums">{value.value}</div>
         <p className="text-xs text-muted-foreground">{value.hint}</p>
       </div>
       <Button variant="ghost" size="sm" onClick={onOpen}>{action}</Button>
@@ -323,7 +324,7 @@ function SplitBar({ parts }: { parts: { label: string; count: number; className:
   if (!total) return <p className="text-sm text-muted-foreground">No devices in this snapshot.</p>;
   return (
     <div>
-      <div className="flex h-3 overflow-hidden rounded-full bg-muted" role="img" aria-label={parts.map((part) => `${part.label} ${part.count}`).join(", ")}>
+      <div className="flex h-2 overflow-hidden rounded bg-muted" role="img" aria-label={parts.map((part) => `${part.label} ${part.count}`).join(", ")}>
         {parts.map((part) => part.count > 0 ? <div key={part.label} className={part.className} style={{ width: `${(part.count / total) * 100}%` }} /> : null)}
       </div>
       <ul className="mt-3 grid gap-1 text-sm">
@@ -342,14 +343,14 @@ function PlatformBars({ platforms, total }: { platforms: { name: string; count: 
   if (!platforms.length) return <p className="text-sm text-muted-foreground">No operating system was reported.</p>;
   return (
     <ul className="grid gap-3">
-      {platforms.map((platform) => (
+      {platforms.map((platform, index) => (
         <li key={platform.name}>
           <div className="mb-1 flex justify-between gap-3 text-sm">
             <span>{platform.name}</span>
             <span className="tabular-nums">{platform.count.toLocaleString("en-GB")}</span>
           </div>
-          <div className="h-2 overflow-hidden rounded-full bg-muted">
-            <div className="h-full bg-primary" style={{ width: `${total ? (platform.count / total) * 100 : 0}%` }} />
+          <div className="h-2 overflow-hidden rounded bg-muted">
+            <div className={`h-full ${index === 0 ? "bg-primary" : "bg-foreground/25"}`} style={{ width: `${total ? (platform.count / total) * 100 : 0}%` }} />
           </div>
         </li>
       ))}

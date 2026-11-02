@@ -26,6 +26,7 @@ import {
 import { Menu, Moon, PanelLeft, RefreshCw, Sun } from "lucide-react";
 import type { SignedInAccount } from "../dashboard/types";
 import { applyLegacy, focusReportSearch, type PageId } from "../legacy/navigation";
+import { Mark } from "./Mark";
 import { findNavItem, navGroups, type NavItem } from "./nav";
 
 const collapsedKey = "brays-sidebar-collapsed";
@@ -134,7 +135,7 @@ export function Shell({
         <Sidebar className="ops-nav" data-collapsed={collapsed ? "true" : "false"}>
           <SidebarHeader>
             <div className="flex items-center gap-2 px-1 py-1">
-              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground" aria-hidden="true">B</span>
+              <Mark />
               <span className="ops-brand grid min-w-0 text-left text-sm leading-tight">
                 <span className="truncate font-semibold">Brays</span>
                 <span className="truncate text-xs text-sidebar-foreground/70">Intune</span>

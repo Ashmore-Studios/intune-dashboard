@@ -93,17 +93,16 @@ html.locked .theme-toggle { display: none; }
 }
 
 .eyebrow {
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
-.eyebrow::after { content: ''; width: 80px; height: 1px; background: var(--accent); opacity: .4; }
-.container > h1 { font-family: var(--font-display); font-size: 44px; font-weight: 800; margin: 12px 0 8px; letter-spacing: -0.02em; }
+.container > h1 { font-family: var(--font-sans, inherit); font-size: 32px; font-weight: 500; margin: 8px 0; letter-spacing: 0; }
 .subtitle { color: var(--ink-2); margin: 0 0 32px; }
 
 .tiles { display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px; margin-bottom: 24px; }
@@ -115,23 +114,20 @@ html.locked .theme-toggle { display: none; }
   grid-template-areas: "a b c" "a d d";
   margin-bottom: 24px;
 }
-.ov-anchor { background: linear-gradient(180deg, var(--accent-soft), var(--card) 70%); border-color: var(--accent); }
-.ov-anchor .tile-value { color: var(--accent); letter-spacing: -0.03em; line-height: 1; }
+.ov-anchor { background: var(--card); border-color: var(--border, var(--line)); }
+.ov-anchor .tile-value { color: var(--accent); letter-spacing: 0; line-height: 1; font-variant-numeric: tabular-nums; }
 @media (max-width: 900px) {
   .tiles.ov-bento { grid-template-columns: 1fr 1fr; grid-template-areas: "a a" "b c" "d d"; }
 }
 .tile {
-  @apply rounded-xl border border-border bg-card p-5 shadow-sm transition-shadow;
+  @apply rounded-xl border border-border bg-card p-5;
 }
-.tile:hover { @apply shadow-md; }
 .tile.clickable { cursor: pointer; }
-.tile.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-/* Stoplight KPI tiles — full 2px border + light tinted background + colored value.
-   Active state on these uses an outline so the status border stays visible. */
+.tile.active { border-color: var(--accent); box-shadow: none; }
 .tile.tile-good,
 .tile.tile-watch,
 .tile.tile-warn,
-.tile.tile-bad { border-width: 2px; padding: 19px; }
+.tile.tile-bad { border-width: 1px; padding: 20px; }
 .tile.tile-good  { border-color: var(--good-border);  background: var(--good-bg); }
 .tile.tile-watch { border-color: var(--watch-border); background: var(--watch-bg); }
 .tile.tile-warn  { border-color: var(--warn-border);  background: var(--warn-bg); }
@@ -144,85 +140,48 @@ html.locked .theme-toggle { display: none; }
 .tile.tile-watch.active,
 .tile.tile-warn.active,
 .tile.tile-bad.active {
-  box-shadow: 0 0 0 2px var(--accent);
+  box-shadow: none;
 }
 .tile.tile-good.active  { border-color: var(--good-border); }
 .tile.tile-watch.active { border-color: var(--watch-border); }
 .tile.tile-warn.active  { border-color: var(--warn-border); }
 .tile.tile-bad.active   { border-color: var(--bad-border); }
 .tile-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--muted);
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
-.tile-value { font-size: 38px; font-weight: 800; letter-spacing: -0.02em; line-height: 1; }
+.tile-value { font-size: 32px; font-weight: 500; letter-spacing: 0; line-height: 1; font-variant-numeric: tabular-nums; }
 .tile-value.accent { color: var(--accent); }
-.tile-sub { font-size: 12px; color: var(--muted); margin-top: 10px; }
-
-/* Orchestrated reveal — hero + KPI tiles rise in with a short stagger on
-   each render. Kept subtle; fully disabled under prefers-reduced-motion. */
-@keyframes riseIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: none; }
-}
-.hero { animation: riseIn .5s cubic-bezier(.22,1,.36,1) both; }
-.tiles .tile { animation: riseIn .45s cubic-bezier(.22,1,.36,1) both; }
-.tiles .tile:nth-child(1) { animation-delay: .04s; }
-.tiles .tile:nth-child(2) { animation-delay: .08s; }
-.tiles .tile:nth-child(3) { animation-delay: .12s; }
-.tiles .tile:nth-child(4) { animation-delay: .16s; }
-.tiles .tile:nth-child(5) { animation-delay: .20s; }
-.tiles .tile:nth-child(6) { animation-delay: .24s; }
-.tiles .tile:nth-child(7) { animation-delay: .28s; }
-.tiles .tile:nth-child(8) { animation-delay: .32s; }
-.tiles .tile:nth-child(n+9) { animation-delay: .36s; }
-@media (prefers-reduced-motion: reduce) {
-  .hero, .tiles .tile { animation: none; }
-}
+.tile-sub { font-size: 12px; color: var(--muted); margin-top: 8px; }
 
 .hero {
   position: relative;
   overflow: hidden;
-  /* Layered radial glows (warm top-right, cool bottom-left) turn the flat
-     dark panel into a lit surface; grain added via ::before below. */
-  background:
-    radial-gradient(130% 120% at 88% 6%, rgba(61,145,243,.22), transparent 52%),
-    radial-gradient(95% 90% at 6% 104%, rgba(120,142,205,.12), transparent 58%),
-    var(--dark);
-  color: white;
-  border: none;
-  padding: 28px;
-  border-radius: 14px;
+  background: var(--card);
+  color: var(--foreground, var(--ink));
+  border: 1px solid var(--border, var(--line));
+  padding: 24px;
+  border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 40px;
+  gap: 32px;
   margin-bottom: 32px;
   min-height: 160px;
-  box-shadow: 0 14px 44px rgba(15,15,16,.20);
 }
-.hero::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image: var(--grain);
-  opacity: .07;
-  mix-blend-mode: overlay;
-}
-.hero > * { position: relative; z-index: 1; }
-.hero .tile-label { color: rgba(255,255,255,.5); }
+.hero .tile-label { color: var(--muted); }
 .hero-left { flex: 0 0 auto; }
-.hero-value { font-size: 64px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; margin-top: 14px; }
-.hero-caption { color: rgba(255,255,255,.55); font-size: 13px; margin-top: 8px; }
-.hero-right { flex: 1; display: flex; flex-direction: column; gap: 14px; max-width: 600px; }
+.hero-value { font-size: 56px; font-weight: 500; letter-spacing: -0.02em; line-height: 1; margin-top: 8px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.hero-caption { color: var(--muted); font-size: 13px; margin-top: 8px; }
+.hero-right { flex: 1; display: flex; flex-direction: column; gap: 12px; max-width: 600px; }
 .breakdown-row { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
-.breakdown-row .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 10px; }
-.breakdown-row .label { color: rgba(255,255,255,.85); }
-.breakdown-row .val { font-weight: 700; }
+.breakdown-row .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+.breakdown-row .label { color: var(--foreground, var(--ink)); }
+.breakdown-row .val { font-weight: 500; font-variant-numeric: tabular-nums; }
 
 .table-card {
   @apply overflow-x-auto rounded-xl border border-border bg-card shadow-sm;
@@ -275,7 +234,7 @@ tbody tr:last-child td { @apply border-b-0; }
 .app-name { @apply font-semibold text-foreground; }
 .pub { @apply text-muted-foreground; }
 .version, .date { @apply text-muted-foreground tabular-nums; }
-.badge { @apply inline-block rounded px-2 py-0.5 text-[10px] font-semibold tracking-wide; }
+.badge { @apply inline-block rounded px-2 py-0.5 text-[12px] font-medium tracking-normal; }
 .badge-32 { @apply bg-[var(--accent-soft)] text-primary; }
 .badge-64 { @apply bg-[var(--surface-muted)] text-foreground; }
 .badge-both { @apply bg-[var(--good-bg)] text-[var(--good-ink)]; }
@@ -311,7 +270,7 @@ tbody tr:last-child td { @apply border-b-0; }
 .field-value { color: var(--ink); word-break: break-all; }
 .field-value.mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
 .cmd-section { margin-top: 20px; }
-.cmd-section h4 { font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+.cmd-section h4 { font-size: 12px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--muted); margin: 0 0 12px; }
 .cmd { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px; font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; word-break: break-all; margin-bottom: 8px; }
 .cmd-row { display: flex; gap: 8px; align-items: start; }
 .cmd-row .cmd { flex: 1; margin-bottom: 0; }
@@ -403,11 +362,11 @@ tbody tr:last-child td { @apply border-b-0; }
   text-overflow: ellipsis;
   transition: color .15s, background .15s, box-shadow .15s;
 }
-.subtab:hover { color: var(--ink-2); background: rgba(61,145,243,.08); }
+.subtab:hover { color: var(--ink-2); background: color-mix(in oklch, var(--foreground) 6%, transparent); }
 .subtab.active {
-  color: var(--accent);
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px rgba(61,145,243,.28);
+  color: var(--foreground, var(--ink));
+  background: var(--surface-muted, var(--row-hover));
+  box-shadow: inset 0 1px 0 color-mix(in oklch, var(--foreground) 12%, transparent);
 }
 
 /* Hardware tab filter chips */
@@ -421,10 +380,10 @@ tbody tr:last-child td { @apply border-b-0; }
 }
 .filter-group { display: flex; align-items: center; gap: 8px; }
 .filter-group-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--muted);
 }
 .filter-select {
@@ -528,28 +487,25 @@ tbody tr.warn-row:hover { @apply bg-[color-mix(in_oklch,var(--warn-bg)_78%,var(-
 .signin-brand {
   position: relative; overflow: hidden;
   padding: 44px 46px;
-  color: #fff;
-  background:
-    radial-gradient(130% 120% at 88% 4%, rgba(61,145,243,.30), transparent 52%),
-    radial-gradient(95% 90% at 4% 104%, rgba(120,142,205,.16), transparent 58%),
-    var(--dark);
+  color: var(--foreground, #eef0f5);
+  background: #0b0d14;
   display: flex; flex-direction: column; justify-content: center;
 }
 .signin-brand::before {
   content: ''; position: absolute; inset: 0; pointer-events: none;
-  background-image: var(--grain); opacity: .08; mix-blend-mode: overlay;
+  opacity: 0;
 }
 .signin-brand > * { position: relative; z-index: 1; }
 /* "Microsoft Intune" is the H1; the tagline below is the H2 subhead. */
 .signin-eyebrow {
   display: block;
-  color: var(--accent); font-size: 12px; font-weight: 700;
-  letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--muted, #7a8296); font-size: 12px; font-weight: 500;
+  letter-spacing: 0; text-transform: none;
   margin-bottom: 4px;
 }
 .signin-brand-title { font-size: 19px; font-weight: 600; color: rgba(255,255,255,.82); letter-spacing: -0.005em; line-height: 1.32; margin: 12px 0 12px; }
 .signin-brand-sub { color: rgba(255,255,255,.66); font-size: 14px; line-height: 1.55; margin: 0 0 26px; max-width: 48ch; }
-.signin-covers-label { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(255,255,255,.4); margin-bottom: 15px; }
+.signin-covers-label { font-size: 12px; font-weight: 500; letter-spacing: 0; text-transform: none; color: rgba(255,255,255,.55); margin-bottom: 16px; }
 /* Dense capability grid — name + one-line description, two columns */
 .signin-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px 26px; }
 .signin-feat { font-size: 13px; line-height: 1.25; }
@@ -564,11 +520,11 @@ tbody tr.warn-row:hover { @apply bg-[color-mix(in_oklch,var(--warn-bg)_78%,var(-
 .signin-badge {
   width: 54px; height: 54px; border-radius: 16px;
   display: flex; align-items: center; justify-content: center;
-  color: var(--btn-solid-fg); background: linear-gradient(155deg, var(--accent), #1d4573);
+  color: var(--btn-solid-fg); background: var(--accent);
   box-shadow: 0 10px 24px rgba(29,69,115,.32);
   margin-bottom: 20px;
 }
-.signin-title { font-size: 24px; font-weight: 800; letter-spacing: -0.01em; margin: 0 0 6px; }
+.signin-title { font-size: 32px; font-weight: 500; letter-spacing: 0; margin: 0 0 8px; }
 .signin-desc { color: var(--ink-2); font-size: 14.5px; line-height: 1.5; margin: 0 0 24px; }
 .signin-msbtn {
   display: inline-flex; align-items: center; gap: 11px;
@@ -580,7 +536,7 @@ tbody tr.warn-row:hover { @apply bg-[color-mix(in_oklch,var(--warn-bg)_78%,var(-
 .signin-msbtn:hover { border-color: var(--accent); background: var(--bg); transform: translateY(-1px); }
 /* Compact spec table — facts at a glance */
 .signin-specs { width: 100%; margin-top: 28px; padding-top: 22px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 1fr 1fr; gap: 16px 22px; }
-.signin-spec-k { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.signin-spec-k { font-size: 12px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--muted); }
 .signin-spec-v { font-size: 13px; font-weight: 600; color: var(--ink); margin-top: 3px; }
 .signin-action-foot { margin-top: auto; padding-top: 24px; display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
 .signin-action-foot a { color: var(--accent); text-decoration: none; font-weight: 600; }
@@ -624,11 +580,11 @@ html.locked .signin { min-height: calc(100vh - 110px); align-items: center; }
 }
 .assignments-header {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--ink-2);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-bottom: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+  margin-bottom: 8px;
 }
 .assignment-row {
   display: flex;
@@ -641,11 +597,11 @@ html.locked .signin { min-height: calc(100vh - 110px); align-items: center; }
 .assignment-intent {
   display: inline-block;
   box-sizing: border-box;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 4px 8px;
   border-radius: 6px;
   background: var(--line);
   color: var(--ink-2);
@@ -722,10 +678,10 @@ html.locked .signin { min-height: calc(100vh - 110px); align-items: center; }
 .app-assign-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .app-assign-table thead th {
   text-align: left;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
   color: var(--ink-2);
   padding: 10px 14px;
   border-bottom: 1px solid var(--line);

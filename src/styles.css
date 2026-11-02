@@ -158,7 +158,7 @@ body::before {
 }
 #legacy-root .ph,
 #legacy-root .ph-fill {
-  @apply inline-block align-[-0.125em] text-[1.05em] leading-none;
+  @apply inline-block align-[-0.125em] text-[16px] leading-none;
 }
 #legacy-root .ph-status-good { color: var(--good-ink); }
 #legacy-root .ph-status-bad { color: var(--bad-ink); }

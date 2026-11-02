@@ -545,7 +545,7 @@ async function initIntune() {
 
 $('btnSignIn').addEventListener('click', async () => {
   try {
-    if (!msalApp) throw new Error('MSAL not initialized');
+    if (!msalApp) throw new Error('MSAL not initialised');
     const result = await msalApp.loginPopup({ scopes: SCOPES });
     msalApp.setActiveAccount(result.account);
     onSignedIn(result.account);
@@ -1216,7 +1216,7 @@ async function sendRequestorApprovedEmail(reqs, approverNote) {
 // the raw error is the best available story.
 function friendlyMailError(raw) {
   if (/MailboxNotEnabledForRESTAPI|MailboxNotHostedInExchangeOnline|REST API is not yet supported/i.test(raw))
-    return 'The signed-in account has no Exchange Online mailbox. MAA emails send from your own mailbox, so the account you sign in with needs an Exchange Online license.';
+    return 'The signed-in account has no Exchange Online mailbox. MAA emails send from your own mailbox, so the account you sign in with needs an Exchange Online licence.';
   if (/popup_window_error|monitor_window_timeout|user_cancelled/i.test(raw))
     return 'The Mail.Send consent popup was blocked or closed. Allow popups for this site and retry — consent is only needed once.';
   if (/Consent for Mail\.Send|consent_required|AADSTS65001/i.test(raw))
@@ -1888,7 +1888,7 @@ function renderFailed() {
     // Index into the stashed array — flat mode re-sorts a copy, so indexOf
     // must run against the same array the click handler resolves from.
     return hasErr
-      ? `<td class="err-code err-clickable" data-row-idx="${window.__failedFiltered.indexOf(r)}" title="Click to analyze with AI">${esc(r.ErrorCode)}</td>`
+      ? `<td class="err-code err-clickable" data-row-idx="${window.__failedFiltered.indexOf(r)}" title="Click to analyse with AI">${esc(r.ErrorCode)}</td>`
       : `<td class="err-code">${esc(r.ErrorCode) || '—'}</td>`;
   };
   const checkinCell = (r) => `<td style="white-space:nowrap;">${r.DeviceId ? `<span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:12px;" data-ime-checkin="${esc(r.DeviceId)}" data-ime-name="${esc(r.DeviceName || '')}" title="Force an IME required-app check-in on this device (on-demand)"><i class="ph ph-lightning" aria-hidden="true"></i> Check-in</span>` : '—'}</td>`;
@@ -3079,7 +3079,7 @@ async function analyzeError(row, forceFresh = false) {
     }
   }
 
-  $('mBody').innerHTML = `<div style="padding:20px 0; color:var(--muted);">Analyzing with ${brand}…</div>`;
+  $('mBody').innerHTML = `<div style="padding:20px 0; color:var(--muted);">Analysing with ${brand}…</div>`;
 
   const prompt = `You are an Intune/MEM expert. Analyze this Windows app install failure and give a concise diagnosis plus remediation steps.
 
@@ -5139,7 +5139,7 @@ async function loadAppversions(force = false) {
     appversionsLoading = false;
     appversionsLoaded = false;
     $('appversionsLoading').style.display = 'none';
-    $('appversionsError').innerHTML = `<div class="error-banner">Failed to load Intune app catalog: ${esc(e.message || String(e))}</div>`;
+    $('appversionsError').innerHTML = `<div class="error-banner">Failed to load Intune app catalogue: ${esc(e.message || String(e))}</div>`;
   }
 }
 
@@ -5217,7 +5217,7 @@ function renderAppverRows() {
   $('appverFootnote').textContent = hiddenSingles ? ` · ${hiddenSingles} single-version app${hiddenSingles === 1 ? '' : 's'} hidden` : '';
 
   if (!appverFiltered.length) {
-    tbody.innerHTML = `<tr><td colspan="7" class="empty">No apps to show${appverApps.length ? ' (filter active)' : ' — no apps in the catalog'}.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="empty">No apps to show${appverApps.length ? ' (filter active)' : ' — no apps in the catalogue'}.</td></tr>`;
     return;
   }
   tbody.innerHTML = appverFiltered.map(a => {
@@ -5538,7 +5538,7 @@ document.querySelectorAll('[data-sort-appver-drill]').forEach(th => {
 // which script the modal deploys; everything else is shared.
 // ============================================================
 
-const MD_DEFAULT_DESCRIPTION = `Agentless software metering. Collects per-user application last-execution data from Windows BAM (Background Activity Moderator) and reports a gzip+base64-encoded snapshot via the detection script's stdout channel. Read by THE Intune Dashboard's Software Metering sub-tab to surface idle-90d+ and never-launched installs for license reclamation. Always exits 0; never triggers a remediation.
+const MD_DEFAULT_DESCRIPTION = `Agentless software metering. Collects per-user application last-execution data from Windows BAM (Background Activity Moderator) and reports a gzip+base64-encoded snapshot via the detection script's stdout channel. Read by THE Intune Dashboard's Software Metering sub-tab to surface idle-90d+ and never-launched installs for licence reclamation. Always exits 0; never triggers a remediation.
 
 Privacy: only the first INITIAL of the username is sent. No window titles, document names, URLs, or file paths are collected. Only integer days-since-last-use is transmitted (no exact timestamps).
 
@@ -8934,8 +8934,8 @@ function certhealthAssessment(r) {
     ];
     a.remediate = [
       'Trigger MDM certificate renewal — force a sync / check-in so ROBO renewal can attempt to run',
-      'Re-enroll the device if renewal fails (RenewStatus = 3 typically does not self-recover)',
-      'Verify device enrollment status after remediation'
+      'Re-enrol the device if renewal fails (RenewStatus = 3 typically does not self-recover)',
+      'Verify device enrolment status after remediation'
     ];
   } else if (state === 'atrisk') {
     a.verdict = `Management at risk — the certificate expires in ${r.daysRemaining} day${r.daysRemaining === 1 ? '' : 's'}. Intune renews automatically at check-in, but if renewal fails (as observed in this tenant) management breaks silently at expiry.`;
@@ -8951,12 +8951,12 @@ function certhealthAssessment(r) {
     a.confidenceWhy = ['No recent telemetry to classify against — the device may be off, offline, or abandoned.'];
     a.evidence = [`Device ${syncTxt}`];
     a.symptoms = ['All Intune management is inert until the device checks in'];
-    a.validate = ['Confirm the device is still in use', 'If in use: check connectivity and MDM enrollment on the device'];
+    a.validate = ['Confirm the device is still in use', 'If in use: check connectivity and MDM enrolment on the device'];
     a.remediate = ['If retired: clean the device up from Intune'];
   } else if (r.daysRemaining === null) {
     a.verdict = `No certificate signal — Graph reports no management-certificate data for this device (typical for co-managed or non-MDM-enrolled devices). The device ${syncTxt}.`;
     a.confidence = 'N/A';
-    a.confidenceWhy = ['Certificate lifecycle is not tracked for this enrollment type.'];
+    a.confidenceWhy = ['Certificate lifecycle is not tracked for this enrolment type.'];
   } else {
     a.verdict = `Healthy — the management certificate is valid for ${r.daysRemaining} more day${r.daysRemaining === 1 ? '' : 's'} and the device ${syncTxt}. IME authentication, Win32 apps, scripts and remediations should all be functioning.`;
     a.confidence = 'High';
@@ -10872,7 +10872,7 @@ async function analyzeLogs() {
   $('logStatus').textContent = `Sending ${(processed.length / 1024).toFixed(1)} KB (~${approxTokens.toLocaleString()} tokens) to ${activeModel}…`
     + (truncated ? ' Log exceeded the model context — oldest entries were dropped, newest kept.' : '');
   $('logAnalysisResult').style.display = '';
-  $('logAnalysisResult').innerHTML = `<div style="color:var(--muted); font-size:13px;">Analyzing with ${brand}…</div>`;
+  $('logAnalysisResult').innerHTML = `<div style="color:var(--muted); font-size:13px;">Analysing with ${brand}…</div>`;
 
   const buildPrompt = logs => `You are an Intune/MEM expert analyzing log files from a Windows endpoint. The user is an experienced Intune administrator troubleshooting an app install failure.
 
@@ -11220,7 +11220,7 @@ function openStaleActionModal(kind, id, name, upn) {
   const effectHtml = kind === 'revoke'
     ? `<p style="margin-top:0;">This invalidates <strong>${esc(name) || 'the user'}</strong>'s refresh tokens and forces them to re-authenticate. Live access tokens remain valid for up to ~1 hour unless the resource enforces Continuous Access Evaluation (CAE).</p>
        <p>Scope requested just-in-time: <code>User.RevokeSessions.All</code>.</p>`
-    : `<p style="margin-top:0;">This sets <code>accountEnabled=false</code> on <strong>${esc(name) || 'the user'}</strong>, blocking new sign-ins. Live access tokens remain valid for up to ~1 hour unless the resource enforces Continuous Access Evaluation (CAE). Existing data, licenses, and group memberships are preserved.</p>
+    : `<p style="margin-top:0;">This sets <code>accountEnabled=false</code> on <strong>${esc(name) || 'the user'}</strong>, blocking new sign-ins. Live access tokens remain valid for up to ~1 hour unless the resource enforces Continuous Access Evaluation (CAE). Existing data, licences, and group memberships are preserved.</p>
        <p>Scope requested just-in-time: <code>User.EnableDisableAccount.All</code>.</p>
        <p style="margin-bottom:6px;">To confirm, type <code>DISABLE</code>:</p>`;
   const needsTyped = kind === 'disable';
@@ -11422,7 +11422,7 @@ async function queryLocalAgents() {
 
 // Fleet-scan: the "THE Intune Dashboard - AI Agent Scan" Proactive Remediation
 // (scripts/ai-agent-detect.ps1). Always merged with Defender hunting so agents
-// Microsoft's catalog omits (e.g. Grok Build) still surface when the PR finds them.
+// Microsoft's catalogue omits (e.g. Grok Build) still surface when the PR finds them.
 // Mirrors metering: per-customer script ID with by-name self-heal, deviceRunStates
 // fan-out, gzip+base64 decode of detection output.
 let aiagentsScanDevices = 0;
@@ -11679,15 +11679,15 @@ function aiagentsSourceNoticeHtml() {
     return `<div class="notice-banner"><strong>No local AI agents discovered yet.</strong><br>Source check — ${detail}.<br>${deployCta}<br><br><strong>Why the Defender sources are empty:</strong> agent discovery is a staged preview — it requires Defender for Endpoint P2, onboarded devices running Defender Antivirus in active mode, the agent on <a href="https://learn.microsoft.com/en-us/defender-endpoint/local-agent-discovery-overview" target="_blank" rel="noopener noreferrer">Microsoft's supported-agent list</a>, and currently ships through Defender's <strong>Beta platform/engine update channel</strong>. Ground truth lives in the Defender portal → <strong>Assets → AI Agents → Local agents</strong>; if agents show there but not here, that's a dashboard bug — tell us. Agents not on Microsoft's list (e.g. <strong>Grok Build</strong>) only appear via fleet scan.</div>`;
   }
   if (aiagentsSource === 'Merged') {
-    return `<div class="notice-banner">Source: <strong>Defender + Fleet scan</strong> — hunting rows merged with the <code>${esc(AI_SCAN_SCRIPT_NAME)}</code> Proactive Remediation (${aiagentsScanDevices} device${aiagentsScanDevices === 1 ? '' : 's'}; <strong>${aiagentsFleetOnlyCount}</strong> install${aiagentsFleetOnlyCount === 1 ? '' : 's'} only in fleet scan — typically agents Microsoft's catalog omits, e.g. Grok Build).${lastRun}${scriptMeta}${staleWarn}${aiagentsScanDecodeFail ? ` <span style="color:var(--danger);">${aiagentsScanDecodeFail} device snapshot(s) failed to decode.</span>` : ''}</div>`;
+    return `<div class="notice-banner">Source: <strong>Defender + Fleet scan</strong> — hunting rows merged with the <code>${esc(AI_SCAN_SCRIPT_NAME)}</code> Proactive Remediation (${aiagentsScanDevices} device${aiagentsScanDevices === 1 ? '' : 's'}; <strong>${aiagentsFleetOnlyCount}</strong> install${aiagentsFleetOnlyCount === 1 ? '' : 's'} only in fleet scan — typically agents Microsoft's catalogue omits, e.g. Grok Build).${lastRun}${scriptMeta}${staleWarn}${aiagentsScanDecodeFail ? ` <span style="color:var(--danger);">${aiagentsScanDecodeFail} device snapshot(s) failed to decode.</span>` : ''}</div>`;
   }
   if (aiagentsSource === 'FleetScan') {
-    return `<div class="notice-banner">Source: <strong>Fleet scan</strong> — the <code>${esc(AI_SCAN_SCRIPT_NAME)}</code> Proactive Remediation (${aiagentsScanDevices} device${aiagentsScanDevices === 1 ? '' : 's'} reporting detections). Defender hunting was empty; this client-side scan fills the tab (and keeps agents Microsoft doesn't catalog, like <strong>Grok Build</strong>). "Detected" is the install-artifact creation date reported by the scan.${lastRun}${scriptMeta}${staleWarn}${aiagentsScanDecodeFail ? ` <span style="color:var(--danger);">${aiagentsScanDecodeFail} device snapshot(s) failed to decode.</span>` : ''}</div>`;
+    return `<div class="notice-banner">Source: <strong>Fleet scan</strong> — the <code>${esc(AI_SCAN_SCRIPT_NAME)}</code> Proactive Remediation (${aiagentsScanDevices} device${aiagentsScanDevices === 1 ? '' : 's'} reporting detections). Defender hunting was empty; this client-side scan fills the tab (and keeps agents Microsoft doesn't catalogue, like <strong>Grok Build</strong>). "Detected" is the install-artefact creation date reported by the scan.${lastRun}${scriptMeta}${staleWarn}${aiagentsScanDecodeFail ? ` <span style="color:var(--danger);">${aiagentsScanDecodeFail} device snapshot(s) failed to decode.</span>` : ''}</div>`;
   }
   if (aiagentsSource === 'ExposureGraph') {
-    return `<div class="notice-banner">Source: exposure graph (<code>ExposureGraphEdges</code> · <code>endpointAiAgent</code> nodes) — Microsoft's documented home for endpoint agent discovery. This source carries agent + device only, so Vendor / OS / User / Detected show "—" and the <strong>New (7 days)</strong> tile is unavailable. Fleet scan was empty or not deployed — agents outside Microsoft's catalog will not appear until the scan reports.${scriptMeta}${staleWarn}</div>`;
+    return `<div class="notice-banner">Source: exposure graph (<code>ExposureGraphEdges</code> · <code>endpointAiAgent</code> nodes) — Microsoft's documented home for endpoint agent discovery. This source carries agent + device only, so Vendor / OS / User / Detected show "—" and the <strong>New (7 days)</strong> tile is unavailable. Fleet scan was empty or not deployed — agents outside Microsoft's catalogue will not appear until the scan reports.${scriptMeta}${staleWarn}</div>`;
   }
-  return `<div class="notice-banner">Source: Defender XDR <code>${esc(aiagentsSource)}</code> table.${aiagentsSource === 'AIAgentsInfo' ? ' Heads-up: this table is retired on <strong>July 1, 2026</strong> in favour of <code>AgentsInfo</code>; the dashboard already tries the new name first on every load.' : ''} Fleet scan was empty or not deployed — agents outside Microsoft's catalog (e.g. Grok) need the AI Agent Scan remediation.${lastRun}${scriptMeta}${staleWarn}</div>`;
+  return `<div class="notice-banner">Source: Defender XDR <code>${esc(aiagentsSource)}</code> table.${aiagentsSource === 'AIAgentsInfo' ? ' Heads-up: this table is retired on <strong>July 1, 2026</strong> in favour of <code>AgentsInfo</code>; the dashboard already tries the new name first on every load.' : ''} Fleet scan was empty or not deployed — agents outside Microsoft's catalogue (e.g. Grok) need the AI Agent Scan remediation.${lastRun}${scriptMeta}${staleWarn}</div>`;
 }
 
 async function loadAiAgents(force = false) {

@@ -6,7 +6,7 @@
   <div class="tabs">
     <button class="tab" data-tab="local">Local</button>
     <button class="tab active" data-tab="intune">Intune</button>
-    <button class="tab" data-tab="analyze">Analyze</button>
+    <button class="tab" data-tab="analyze">Analyse</button>
     <button class="tab" data-tab="settings">Settings</button>
   </div>
 
@@ -48,13 +48,13 @@
 
     <div class="hero">
       <div class="hero-left">
-        <div class="tile-label">Architecture Breakdown</div>
+        <div class="tile-label">Architecture breakdown</div>
         <div class="hero-value" id="heroTotal">0</div>
         <div class="hero-caption">unique applications detected</div>
       </div>
       <div class="hero-right">
         <div class="breakdown-row">
-          <div><span class="dot" style="background:#5a8ec4;"></span><span class="label">64-bit only</span></div>
+          <div><span class="dot" style="background:var(--foreground); opacity:.85;"></span><span class="label">64-bit only</span></div>
           <div><span class="val" id="heroX64">0</span></div>
         </div>
         <div class="breakdown-row">
@@ -62,11 +62,11 @@
           <div><span class="val" id="heroX86">0</span></div>
         </div>
         <div class="breakdown-row">
-          <div><span class="dot" style="background:#4caf50;"></span><span class="label">Registered as both</span></div>
+          <div><span class="dot" style="background:var(--foreground); opacity:.45;"></span><span class="label">Registered as both</span></div>
           <div><span class="val" id="heroBoth">0</span></div>
         </div>
         <div class="breakdown-row">
-          <div><span class="dot" style="background:#6b6b70;"></span><span class="label">System components</span></div>
+          <div><span class="dot" style="background:var(--foreground); opacity:.25;"></span><span class="label">System components</span></div>
           <div><span class="val" id="heroSys">0</span></div>
         </div>
       </div>
@@ -150,15 +150,15 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
       <div class="signin-card">
         <div class="signin-brand">
           <span class="signin-eyebrow">Microsoft Intune</span>
-          <div class="signin-brand-title">See your whole fleet,<br>not just one device.</div>
-          <p class="signin-brand-sub">One read-only sign-in turns Intune's scattered reports into a single, fast operations console — right in your browser.</p>
+          <div class="signin-brand-title">Intune reports for this tenant</div>
+          <p class="signin-brand-sub">Devices, applications and security, read from Microsoft Graph.</p>
           <div class="signin-covers-label">Everything in one place</div>
           <div class="signin-grid">
             <div class="signin-feat"><div class="signin-feat-name">App failures</div><div class="signin-feat-desc">Install errors + AI diagnosis</div></div>
             <div class="signin-feat"><div class="signin-feat-name">Hardware</div><div class="signin-feat-desc">Fleet inventory &amp; health</div></div>
             <div class="signin-feat"><div class="signin-feat-name">BitLocker</div><div class="signin-feat-desc">Recovery-key escrow</div></div>
             <div class="signin-feat"><div class="signin-feat-name">Config drift</div><div class="signin-feat-desc">Baseline compliance</div></div>
-            <div class="signin-feat"><div class="signin-feat-name">Autopilot</div><div class="signin-feat-desc">Enrollment status</div></div>
+            <div class="signin-feat"><div class="signin-feat-name">Autopilot</div><div class="signin-feat-desc">Enrolment status</div></div>
             <div class="signin-feat"><div class="signin-feat-name">Remediation</div><div class="signin-feat-desc">Proactive scripts</div></div>
             <div class="signin-feat"><div class="signin-feat-name">Stale users</div><div class="signin-feat-desc">Dormant accounts</div></div>
             <div class="signin-feat"><div class="signin-feat-name">Vulnerabilities</div><div class="signin-feat-desc">CVE exposure</div></div>
@@ -186,7 +186,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
             <div><div class="signin-spec-k">Reports</div><div class="signin-spec-v">20+ views</div></div>
             <div><div class="signin-spec-k">Tenants</div><div class="signin-spec-v">Multi / MSP</div></div>
             <div><div class="signin-spec-k">Sign-in</div><div class="signin-spec-v">Microsoft Entra</div></div>
-            <div><div class="signin-spec-k">License</div><div class="signin-spec-v">Open source</div></div>
+            <div><div class="signin-spec-k">Licence</div><div class="signin-spec-v">Open source</div></div>
           </div>
           <div class="signin-action-foot">
             <span>Read-only · client-side · open source</span>
@@ -864,7 +864,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
                 <option value="duplicate">Duplicate Entra</option>
                 <option value="ok">OK</option>
               </select>
-              <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); cursor:pointer;" title="Hybrid Autopilot enrollment legitimately creates one Entra-joined + one hybrid-joined record per device. Default ON ignores those.">
+              <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); cursor:pointer;" title="Hybrid Autopilot enrolment legitimately creates one Entra-joined + one hybrid-joined record per device. Default ON ignores those.">
                 <input type="checkbox" id="autopilotHideHybrid" checked> Hide hybrid-by-design duplicates
               </label>
               <span style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; display:none;" id="btnAutopilotClearKpi" title="Clear KPI selection"><i class="ph ph-x" aria-hidden="true"></i> Clear KPI</span>
@@ -1586,7 +1586,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
 
       <div id="intuneSubStaleusers" style="display:none;">
         <div class="tab-hint">
-          Entra <strong>member</strong> accounts that are inactive or never signed in — the license-reclaim / identity-hygiene view for customer reviews. Last activity = the most recent of <code>lastSignInDateTime</code>, <code>lastNonInteractiveSignInDateTime</code>, and <code>lastSuccessfulSignInDateTime</code>, so non-interactive activity doesn't false-flag a user. Read-only by default; Revoke / Disable request scopes <strong>just-in-time</strong> on first click — list-only viewers are never prompted for write scopes. <code>signInActivity</code> requires Entra ID <strong>P1/P2</strong>.
+          Entra <strong>member</strong> accounts that are inactive or never signed in — the licence-reclaim / identity-hygiene view for customer reviews. Last activity = the most recent of <code>lastSignInDateTime</code>, <code>lastNonInteractiveSignInDateTime</code>, and <code>lastSuccessfulSignInDateTime</code>, so non-interactive activity doesn't false-flag a user. Read-only by default; Revoke / Disable request scopes <strong>just-in-time</strong> on first click — list-only viewers are never prompted for write scopes. <code>signInActivity</code> requires Entra ID <strong>P1/P2</strong>.
         </div>
         <div class="tiles" style="grid-template-columns: repeat(4, 1fr);">
           <div class="tile" data-su-tile="" style="cursor:pointer;" title="Show all members in scope">
@@ -1607,7 +1607,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
           <div class="tile tile-bad" data-su-tile="licensedStale" style="cursor:pointer;" title="Filter: licensed AND stale (idle ≥ threshold or never signed in) — the reclaim headline">
             <div class="tile-label">Licensed &amp; stale</div>
             <div class="tile-value" id="suTileLicensedStale">0</div>
-            <div class="tile-sub">≥ 1 license + stale</div>
+            <div class="tile-sub">≥ 1 licence + stale</div>
           </div>
         </div>
         <div class="table-card">
@@ -1964,9 +1964,9 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
       </div><!-- /intuneSubMetering -->
 
       <div id="intuneSubAppversions" style="display:none;">
-        <div class="tab-hint">Version sprawl in your <strong>Intune app catalog</strong> (<code>deviceAppManagement/mobileApps</code>) — the app <em>packages</em> you've created/uploaded, <strong>assigned or not</strong>. Surfaces apps you hold many versions of (the classic "11 Notepad++ packages" mess, often from PatchMyPC publishing) so you can retire the superseded ones. <strong>Surplus</strong> = packages older than the newest version of that app; <strong>Unassigned</strong> packages target no group at all (safest to delete). Click <i class="ph ph-trash" aria-hidden="true"></i> on any package to delete it from Intune (reuses the typed-confirm Delete flow, multi-admin-approval aware).</div>
+        <div class="tab-hint">Version sprawl in your <strong>Intune app catalogue</strong> (<code>deviceAppManagement/mobileApps</code>) — the app <em>packages</em> you've created/uploaded, <strong>assigned or not</strong>. Surfaces apps you hold many versions of (the classic "11 Notepad++ packages" mess, often from PatchMyPC publishing) so you can retire the superseded ones. <strong>Surplus</strong> = packages older than the newest version of that app; <strong>Unassigned</strong> packages target no group at all (safest to delete). Click <i class="ph ph-trash" aria-hidden="true"></i> on any package to delete it from Intune (reuses the typed-confirm Delete flow, multi-admin-approval aware).</div>
 
-        <div id="appversionsLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading Intune app catalog…</div>
+        <div id="appversionsLoading" style="color:var(--muted); font-size:13px; padding:12px;">Loading Intune app catalogue…</div>
         <div id="appversionsError"></div>
 
         <div id="appversionsContent" style="display:none;">
@@ -1976,7 +1976,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <div class="tile-value" id="kAppverMulti">—</div>
               <div class="tile-sub">of <span id="kAppverTotal">—</span> apps</div>
             </div>
-            <div class="tile" id="kAppverWorstTile" title="The app with the most packages in the catalog — click to open it">
+            <div class="tile" id="kAppverWorstTile" title="The app with the most packages in the catalogue — click to open it">
               <div class="tile-label">Worst offender</div>
               <div class="tile-value" id="kAppverWorst" style="font-size:20px; line-height:1.25;">—</div>
               <div class="tile-sub" id="kAppverWorstSub">—</div>
@@ -1991,7 +1991,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
               <div class="tile-value" id="kAppverUnassigned">—</div>
               <div class="tile-sub">orphans, safest to delete</div>
             </div>
-            <div class="tile" title="Single-version rate — share of catalog apps held in exactly one package. Green ≥ 85%, yellow ≥ 60%, red below.">
+            <div class="tile" title="Single-version rate — share of catalogue apps held in exactly one package. Green ≥ 85%, yellow ≥ 60%, red below.">
               <div class="tile-label">Single-version rate</div>
               <div style="display:flex; align-items:center; gap:14px;">
                 <svg width="48" height="48" viewBox="0 0 50 50" style="flex-shrink:0;" aria-hidden="true">
@@ -2094,7 +2094,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
           <input type="checkbox" id="logAutoTrim" checked>
           <span>Auto-trim to error-adjacent lines <span style="color:var(--muted); font-size:11px;">(recommended — cuts tokens ~80%)</span></span>
         </label>
-        <button class="btn" id="btnAnalyzeLogs" disabled>Analyze</button>
+        <button class="btn" id="btnAnalyzeLogs" disabled>Analyse</button>
         <span id="logStatus" style="font-size:12px; color:var(--muted);"></span>
       </div>
 
@@ -2125,8 +2125,8 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
       </div>
 
       <div id="settings-integrations">
-        <div style="font-weight:600; font-size:14px; margin-bottom:6px;">Analyze provider</div>
-        <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">Which API Analyze and error-code clicks use. Switching provider or leaving a key field saves immediately — you do not have to hit Save first. An <code>xai-</code> key in either field uses Grok. Keys stay in this browser only — never sent to Microsoft Graph.</div>
+        <div style="font-weight:600; font-size:14px; margin-bottom:6px;">Analyse provider</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">Which API Analyse and error-code clicks use. Switching provider or leaving a key field saves immediately — you do not have to hit Save first. An <code>xai-</code> key in either field uses Grok. Keys stay in this browser only — never sent to Microsoft Graph.</div>
         <select id="llmProvider" class="search" style="width:100%; cursor:pointer;">
           <option value="claude" selected>Claude — Anthropic or OpenRouter</option>
           <option value="xai">Grok — xAI</option>
@@ -2135,13 +2135,13 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
 
       <div>
         <div style="font-weight:600; font-size:14px; margin-bottom:6px;">Claude API key</div>
-        <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">Anthropic (<code>sk-ant-…</code> → api.anthropic.com) or OpenRouter (<code>sk-or-…</code> → openrouter.ai, same Claude models). If you paste an <code>xai-…</code> key here, Analyze uses Grok instead. Stored in localStorage — never sent anywhere else.</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">Anthropic (<code>sk-ant-…</code> → api.anthropic.com) or OpenRouter (<code>sk-or-…</code> → openrouter.ai, same Claude models). If you paste an <code>xai-…</code> key here, Analyse uses Grok instead. Stored in localStorage — never sent anywhere else.</div>
         <input type="password" class="search" id="claudeApiKey" placeholder="sk-ant-api03-… or sk-or-v1-…" style="width:100%; font-family:ui-monospace, monospace;">
       </div>
 
       <div>
         <div style="font-weight:600; font-size:14px; margin-bottom:6px;">xAI API key</div>
-        <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">Grok key from <a href="https://console.x.ai" target="_blank" rel="noopener noreferrer">console.x.ai</a> — not Twitter/X developer.x.com. Typical prefix <code>xai-…</code>. This field stays visible; pasting here (or an <code>xai-</code> key in the Claude field) routes Analyze to <code>https://api.x.ai</code>. Stored in localStorage — never sent anywhere else.</div>
+        <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">Grok key from <a href="https://console.x.ai" target="_blank" rel="noopener noreferrer">console.x.ai</a> — not Twitter/X developer.x.com. Typical prefix <code>xai-…</code>. This field stays visible; pasting here (or an <code>xai-</code> key in the Claude field) routes Analyse to <code>https://api.x.ai</code>. Stored in localStorage — never sent anywhere else.</div>
         <input type="password" class="search" id="xaiApiKey" placeholder="xai-…" style="width:100%; font-family:ui-monospace, monospace;">
       </div>
 
@@ -2180,7 +2180,7 @@ Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
           <ul style="margin:0; padding-left:18px;">
             <li><strong>In-memory (this session)</strong> — each Intune sub-tab keeps its last Graph result until you click <strong><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh</strong> on that tab or switch customer/tenant (full reset). Switching browser tabs does not clear it.</li>
             <li><strong>sessionStorage</strong> — MSAL access tokens only (no refresh tokens across browser restarts).</li>
-            <li><strong>localStorage</strong> — customers list, Claude/OpenRouter and xAI keys + model, Analyze provider, large-tenant toggles, error-analysis cache. Survives reloads; never uploaded as a blob to our servers (there are none).</li>
+            <li><strong>localStorage</strong> — customers list, Claude/OpenRouter and xAI keys + model, Analyse provider, large-tenant toggles, error-analysis cache. Survives reloads; never uploaded as a blob to our servers (there are none).</li>
             <li><strong>Always live on demand</strong> — MAA approve/reject/complete, app/device deletes, script deploy, mail send, and any action after Cancel mid-walk (partial data stays until Refresh).</li>
             <li><strong>Long walks</strong> — Hardware device paging + RAM backfill, and Assignments multi-endpoint index, show <strong><i class="ph ph-x" aria-hidden="true"></i> Cancel</strong> while running. Cancel keeps whatever already arrived.</li>
           </ul>
